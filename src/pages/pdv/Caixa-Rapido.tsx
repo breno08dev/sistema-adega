@@ -2,131 +2,64 @@
 import { useEffect, useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Plus, Minus, X, Search, ShoppingCart, CreditCard, Landmark, Wallet, DollarSign } from "lucide-react";
+import { Plus, Minus, X, Search, ShoppingCart, CreditCard, Landmark, Wallet, DollarSign, Package, Lock } from "lucide-react";
 import { Database } from "@/integrations/supabase/types";
 import { useAuth } from "@/contexts/AuthContext";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 
-// --- Definição dos Tipos ---
 type ProductRow = Database["public"]["Tables"]["products"]["Row"];
 type Category = Database["public"]["Tables"]["categories"]["Row"];
-type Product = ProductRow & {
-  categories: { nome: string } | null;
-};
-type CartItem = Product & {
-  quantidade_venda: number;
-};
+type Product = ProductRow & { categories: { nome: string } | null; };
+type CartItem = Product & { quantidade_venda: number; };
 type PaymentMethod = Database["public"]["Enums"]["payment_method"];
-
-// NOVO TIPO - Status do Caixa
 type CaixaStatus = "aberto" | "fechado" | "loading";
-
-const paymentMethodLabels: Record<PaymentMethod, string> = {
-  dinheiro: "Dinheiro",
-  pix: "Pix",
-  cartao_credito: "Crédito",
-  cartao_debito: "Débito",
-};
 
 export default function CaixaRapido() {
   const { user } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
-  
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");
-
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | "">("");
+  const [amountPaid, setAmountPaid] = useState(""); // Valor Recebido
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // --- LÓGICA DE ABERTURA DE CAIXA ---
   const [isCaixaModalOpen, setIsCaixaModalOpen] = useState(false);
   const [valorAbertura, setValorAbertura] = useState("");
   const [caixaStatus, setCaixaStatus] = useState<CaixaStatus>("loading");
   const [isSubmittingCaixa, setIsSubmittingCaixa] = useState(false);
 
-  // Efeito para carregar produtos e categorias
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
-        const { data: prodData, error: prodErr } = await supabase
-          .from('products')
-          .select('*, categories(nome)')
-          .order('nome');
-
-        if (prodErr) throw prodErr; 
-
-        const { data: catData, error: catErr } = await supabase
-          .from('categories')
-          .select('*')
-          .order('nome');
-
-        if (catErr) throw catErr;
-
-        setProducts(prodData as Product[]);
-        setCategories(catData);
-
-      } catch (error: any) {
-        console.error("Erro ao carregar dados:", error);
-        toast.error("Erro ao carregar produtos ou categorias", {
-          description: error.message || "Verifique sua conexão ou permissões (RLS)."
-        });
-      } finally {
-        setLoading(false);
-      }
+        const { data: prodData } = await supabase.from('products').select('*, categories(nome)').order('nome');
+        const { data: catData } = await supabase.from('categories').select('*').order('nome');
+        if (prodData) setProducts(prodData as Product[]);
+        if (catData) setCategories(catData);
+      } catch (error) { toast.error("Erro ao carregar dados"); } finally { setLoading(false); }
     };
     loadData();
   }, []); 
 
-  // --- EFEITO: Verificar Status do Caixa (Lendo da tabela 'caixas') ---
   const checkCaixaStatus = async () => {
-    if (!user) {
-      setCaixaStatus("fechado");
-      return;
-    }
-    
+    if (!user) { setCaixaStatus("fechado"); return; }
     setCaixaStatus("loading");
     try {
-      // Esta chamada falha com 406 se a POLÍTICA DE SELECT não existir
-      const { data, error } = await supabase
-        .from("caixas")
-        .select("id")
-        .eq("colaborador_id", user.id)
-        .eq("status", "aberto")
-        .single();
-
-      if (error && error.code !== 'PGRST116') { // PGRST116 = "no rows found"
-        throw error;
-      }
-      
-      if (data) {
-        setCaixaStatus("aberto");
-      } else {
-        setCaixaStatus("fechado");
-      }
-    } catch (error: any) {
-      console.error("Erro ao verificar status do caixa (RLS?):", error);
-      // Não mostramos toast aqui, pois o erro 406 (sem permissão) é comum
-      // e o usuário não precisa ser notificado toda vez.
-      setCaixaStatus("fechado");
-    }
+      const { data } = await supabase.from("caixas").select("id").eq("colaborador_id", user.id).eq("status", "aberto").single();
+      setCaixaStatus(data ? "aberto" : "fechado");
+    } catch { setCaixaStatus("fechado"); }
   };
-
-  useEffect(() => {
-    // Roda a verificação de status quando o usuário é carregado
-    checkCaixaStatus();
-  }, [user]);
-
+  useEffect(() => { checkCaixaStatus(); }, [user]);
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
@@ -137,15 +70,10 @@ export default function CaixaRapido() {
   }, [products, searchTerm, selectedCategory]);
 
   const addToCart = (product: Product) => {
+    if (caixaStatus !== 'aberto') return toast.error("Caixa fechado!");
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === product.id);
-      if (existingItem) {
-        return prevCart.map(item =>
-          item.id === product.id
-            ? { ...item, quantidade_venda: item.quantidade_venda + 1 }
-            : item
-        );
-      }
+      if (existingItem) return prevCart.map(item => item.id === product.id ? { ...item, quantidade_venda: item.quantidade_venda + 1 } : item);
       return [...prevCart, { ...product, quantidade_venda: 1 }];
     });
   };
@@ -153,14 +81,8 @@ export default function CaixaRapido() {
   const updateCartQuantity = (productId: string, amount: number) => {
     setCart(prevCart => {
       const newAmount = Math.max(0, amount);
-      if (newAmount === 0) {
-        return prevCart.filter(item => item.id !== productId);
-      }
-      return prevCart.map(item =>
-        item.id === productId
-          ? { ...item, quantidade_venda: newAmount }
-          : item
-      );
+      if (newAmount === 0) return prevCart.filter(item => item.id !== productId);
+      return prevCart.map(item => item.id === productId ? { ...item, quantidade_venda: newAmount } : item);
     });
   };
 
@@ -168,342 +90,136 @@ export default function CaixaRapido() {
     return cart.reduce((sum, item) => sum + (Number(item.preco_venda) * item.quantidade_venda), 0);
   }, [cart]);
 
-  // --- Função Principal: Finalizar a Venda ---
+  // CÁLCULO DO TROCO
+  const troco = useMemo(() => {
+    if (paymentMethod !== 'dinheiro') return 0;
+    const pago = parseFloat(amountPaid) || 0;
+    return pago > totalCompra ? pago - totalCompra : 0;
+  }, [amountPaid, totalCompra, paymentMethod]);
+
   const handleFinalizeSale = async () => {
-    if (!user) return toast.error("Usuário não encontrado. Faça login.");
-    if (cart.length === 0) return toast.error("Carrinho vazio.");
-    if (!paymentMethod) return toast.error("Escolha um método de pagamento.");
+    if (!user || cart.length === 0 || !paymentMethod) return;
+    if (caixaStatus !== 'aberto') return toast.error("Caixa fechado!");
     
-    if (caixaStatus !== 'aberto') {
-      return toast.error("O caixa está fechado!", {
-        description: "Você precisa abrir o caixa antes de registrar uma venda."
-      });
+    if (paymentMethod === 'dinheiro') {
+        if ((parseFloat(amountPaid) || 0) < totalCompra) return toast.error("Valor insuficiente!");
     }
 
     setIsSubmitting(true);
-
     try {
-      // 1. Criar a Venda (sales)
-      const { data: saleData, error: saleError } = await supabase
-        .from('sales')
-        .insert({
-          colaborador_id: user.id,
-          status: 'finalizada', 
-          metodo_pagamento: paymentMethod,
-        })
-        .select()
-        .single();
-
+      const { data: saleData, error: saleError } = await supabase.from('sales').insert({ colaborador_id: user.id, status: 'finalizada', metodo_pagamento: paymentMethod }).select().single();
       if (saleError) throw saleError;
 
-      // 2. Preparar os Itens da Venda (sale_items)
-      const saleItems = cart.map(item => ({
-        venda_id: saleData.id,
-        produto_id: item.id,
-        quantidade: item.quantidade_venda,
-        preco_unitario: Number(item.preco_venda),
-        subtotal: Number(item.preco_venda) * item.quantidade_venda,
-      }));
-
-      // 3. Inserir os Itens (Isso vai disparar o trigger)
-      const { error: itemsError } = await supabase
-        .from('sale_items')
-        .insert(saleItems);
-
-      if (itemsError) {
-        await supabase.from('sales').delete().eq('id', saleData.id);
-        throw itemsError;
-      }
+      const saleItems = cart.map(item => ({ venda_id: saleData.id, produto_id: item.id, quantidade: item.quantidade_venda, preco_unitario: Number(item.preco_venda), subtotal: Number(item.preco_venda) * item.quantidade_venda }));
+      const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
+      if (itemsError) throw itemsError;
       
-      // 4. Sucesso: Limpar tudo
-      toast.success("Venda finalizada com sucesso!");
-      setCart([]);
-      setPaymentMethod("");
-      setIsPaymentModalOpen(false);
-      
-    } catch (error: any) {
-      console.error("Erro ao finalizar venda:", error);
-      toast.error("Erro ao finalizar venda", { description: error.message });
-    } finally {
-      setIsSubmitting(false); 
-    }
+      toast.success("Venda realizada!");
+      setCart([]); setPaymentMethod(""); setAmountPaid(""); setIsPaymentModalOpen(false);
+    } catch (error: any) { toast.error("Erro na venda"); } finally { setIsSubmitting(false); }
   };
 
-  // --- FUNÇÃO DE ABRIR CAIXA (ATUALIZADA) ---
-  // Salva na tabela 'caixas' (para status) E na tabela 'movements' (para o histórico)
   const handleOpenCaixa = async () => {
-    if (!user) return toast.error("Usuário não encontrado. Faça login.");
-    
+    if (!user) return;
     const valorNum = parseFloat(valorAbertura.replace(",", "."));
-    if (isNaN(valorNum) || valorNum < 0) {
-      return toast.error("Valor de abertura inválido.");
-    }
-
-    if (caixaStatus === 'aberto') {
-      return toast.error("O caixa já está aberto.");
-    }
-
+    if (isNaN(valorNum)) return toast.error("Valor inválido");
     setIsSubmittingCaixa(true);
     try {
-      // --- ETAPA 1: Criar o registro do caixa (para status) ---
-      // Esta chamada falha se a POLÍTICA DE INSERT não existir
-      const { data: caixaData, error: caixaError } = await supabase
-        .from("caixas")
-        .insert({
-          colaborador_id: user.id,
-          valor_abertura: valorNum,
-          status: "aberto"
-          // data_abertura é definida por 'default now()' no banco
-        })
-        .select()
-        .single();
-
-      if (caixaError) {
-        console.error("Erro ao inserir na tabela caixas (RLS?):", caixaError);
-        throw new Error(`Falha ao abrir caixa (status): ${caixaError.message}`);
-      }
-      
-      console.log("Caixa (status) aberto com sucesso:", caixaData);
-
-      // --- ETAPA 2: Criar o movimento (para o histórico) ---
-      // (created_at é automático, mas usamos data_abertura para linkar)
-      const { error: movementError } = await supabase
-        .from("movements")
-        .insert({
-          responsavel_id: user.id,
-          tipo: "entrada", // Tipo 'entrada' = Suprimento
-          descricao: 'Abertura de Caixa', // History.tsx procura por esta string
-          valor: valorNum,
-          // Garante que o movimento tenha o mesmo timestamp do caixa
-          created_at: caixaData.data_abertura 
-        });
-
-      if (movementError) {
-        // Se o movimento falhar, precisamos reverter a abertura do caixa
-        console.error("Erro ao criar movimento no histórico (RLS?):", movementError);
-        await supabase.from("caixas").delete().eq("id", caixaData.id);
-        throw new Error(`Falha ao registrar histórico (movimento): ${movementError.message}`);
-      }
-      
-      console.log("Movimento de abertura registrado no histórico.");
-      
-      toast.success("Caixa aberto com sucesso!");
-      setCaixaStatus("aberto"); // Atualiza o estado local
-      setIsCaixaModalOpen(false); // Fecha o modal
-      setValorAbertura(""); // Limpa o input
-      
-    } catch (error: any) {
-      console.error("Erro ao abrir caixa:", error);
-      toast.error("Erro ao abrir caixa", {
-        description: error.message || "Verifique suas permissões (RLS) ou a conexão."
-      });
-    } finally {
-      setIsSubmittingCaixa(false);
-    }
+      const { data: caixaData, error: caixaError } = await supabase.from("caixas").insert({ colaborador_id: user.id, valor_abertura: valorNum, status: "aberto" }).select().single();
+      if (caixaError) throw caixaError;
+      await supabase.from("movements").insert({ responsavel_id: user.id, tipo: "entrada", descricao: 'Abertura de Caixa', valor: valorNum, created_at: caixaData.data_abertura });
+      toast.success("Caixa aberto!");
+      setCaixaStatus("aberto"); setIsCaixaModalOpen(false); setValorAbertura("");
+    } catch (error: any) { toast.error("Erro ao abrir caixa"); } finally { setIsSubmittingCaixa(false); }
   };
 
-
-  // --- Renderização da UI ---
   return (
-    <div className="flex h-[calc(100vh-theme(spacing.16))]">
-      {/* Coluna Esquerda: Vitrine de Produtos */}
-      <div className="w-1/2 flex flex-col p-4 border-r">
-        <h1 className="text-2xl font-bold">Produtos</h1>
-        
-        <div className="flex gap-2 my-4">
-          <Input 
-            placeholder="Buscar produto..." 
-            className="flex-1"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-          <Select value={selectedCategory} onValueChange={setSelectedCategory}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Categoria" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Todas</SelectItem>
-              {categories.map(cat => (
-                <SelectItem key={cat.id} value={cat.id}>{cat.nome}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+    <div className="flex h-[calc(100vh-5rem)] gap-4 overflow-hidden">
+      <Card className="flex-1 md:w-2/3 flex flex-col border-none shadow-sm ring-1 ring-gray-200 dark:ring-gray-800 bg-white dark:bg-gray-900 overflow-hidden">
+        <CardHeader className="p-4 border-b space-y-4 flex-shrink-0">
+            <div className="flex justify-between items-center">
+                 <h1 className="text-xl font-bold flex items-center gap-2"><Package className="h-5 w-5 text-primary" /> Produtos</h1>
+                 <Badge variant="outline" className="px-3 py-1 bg-gray-100">{filteredProducts.length} itens</Badge>
+            </div>
+            <div className="flex gap-2">
+                <div className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input placeholder="Buscar..." className="pl-9 bg-gray-50" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div>
+                <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                    <SelectTrigger className="w-[180px] bg-gray-50"><SelectValue placeholder="Categoria" /></SelectTrigger>
+                    <SelectContent><SelectItem value="all">Todas</SelectItem>{categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.nome}</SelectItem>)}</SelectContent>
+                </Select>
+            </div>
+        </CardHeader>
 
-        {loading && <div className="text-center mt-8">Carregando produtos...</div>}
-
-        <div className="flex-1 overflow-y-auto pr-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 items-start">
-          {filteredProducts.map(product => (
-            <Card key={product.id} className="flex flex-col">
-              <CardHeader className="p-3">
-                <CardTitle className="text-base">{product.nome}</CardTitle>
-              </CardHeader>
-              <CardContent className="flex-1 p-3">
-                <p className="text-sm text-muted-foreground">{product.categories?.nome || "--"}</p>
-                <p className="text-lg font-bold mt-2">R$ {Number(product.preco_venda).toFixed(2)}</p>
-                <p className="text-xs text-muted-foreground">Estoque: {product.quantidade}</p>
-              </CardContent>
-              <Button 
-                className="m-3" 
-                onClick={() => addToCart(product)}
-                disabled={product.quantidade <= 0 || caixaStatus !== 'aberto'} // Desabilita se o caixa estiver fechado
-              >
-                {product.quantidade <= 0 ? "Esgotado" : "Adicionar"}
-              </Button>
-            </Card>
-          ))}
-        </div>
-      </div>
-
-      {/* Coluna Direita: Carrinho e Resumo */}
-      <div className="w-1/2 flex flex-col p-4">
-        
-        {/* --- CARD DE CONTROLE DE CAIXA --- */}
-        <Card className="mb-4">
-          <CardHeader className="flex flex-row items-center justify-between p-4">
-            <CardTitle className="text-lg">Controle de Caixa</CardTitle>
-            <Button 
-              onClick={() => setIsCaixaModalOpen(true)}
-              disabled={caixaStatus !== 'fechado'} // Desabilita se o caixa NÃO estiver fechado
-            >
-              <DollarSign className="h-4 w-4 mr-2" />
-              {caixaStatus === 'loading' ? "Verificando..." : caixaStatus === 'aberto' ? "Caixa Aberto" : "Abrir Caixa"}
-            </Button>
-          </CardHeader>
-        </Card>
-
-        {/* Card de Resumo da Compra */}
-        <Card className="flex-1 flex flex-col">
-          <CardHeader className="p-4">
-            <CardTitle>Resumo da Compra</CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-y-auto p-4">
-            {cart.length === 0 ? (
-              <div className="text-center text-muted-foreground py-8">
-                <ShoppingCart className="mx-auto h-12 w-12" />
-                <p className="mt-2">Carrinho vazio</p>
-                {caixaStatus !== 'aberto' && (
-                  <p className="text-sm text-destructive mt-2">Abra o caixa para iniciar as vendas.</p>
-                )}
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Produto</TableHead>
-                    <TableHead>Qtd.</TableHead>
-                    <TableHead className="text-right">Subtotal</TableHead>
-                    <TableHead className="w-[50px]"> </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {cart.map(item => (
-                    <TableRow key={item.id}>
-                      <TableCell>{item.nome}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateCartQuantity(item.id, item.quantidade_venda - 1)}>
-                            <Minus className="h-4 w-4" />
-                          </Button>
-                          <span className="w-8 text-center">{item.quantidade_venda}</span>
-                          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateCartQuantity(item.id, item.quantidade_venda + 1)}>
-                            <Plus className="h-4 w-4" />
-                          </Button>
+        <CardContent className="flex-1 overflow-y-auto p-4 bg-gray-50/50">
+           {loading ? <div className="flex items-center justify-center h-full text-muted-foreground">Carregando...</div> : (
+            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {filteredProducts.map(product => (
+                    <div key={product.id} className={`group relative bg-white rounded-xl border p-3 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col justify-between h-[130px] ${product.quantidade <= 0 ? 'opacity-60 grayscale' : 'hover:border-primary/50'}`} onClick={() => product.quantidade > 0 && caixaStatus === 'aberto' && addToCart(product)}>
+                        <div className="flex flex-col gap-1"><span className="text-[10px] uppercase font-bold text-muted-foreground truncate">{product.categories?.nome}</span><span className="font-semibold text-sm leading-tight line-clamp-2">{product.nome}</span></div>
+                        <div className="flex justify-between items-end mt-2">
+                             <div className="flex flex-col"><span className="text-[10px] text-muted-foreground">Estoque: {product.quantidade}</span><span className="text-lg font-bold text-primary">R$ {Number(product.preco_venda).toFixed(2)}</span></div>
+                             <div className={`h-8 w-8 rounded-full flex items-center justify-center transition-colors ${product.quantidade <= 0 ? 'bg-gray-100 text-gray-400' : 'bg-gray-100 text-gray-600 group-hover:bg-primary group-hover:text-white'}`}><Plus className="h-4 w-4" /></div>
                         </div>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        R$ {(Number(item.preco_venda) * item.quantidade_venda).toFixed(2)}
-                      </TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => updateCartQuantity(item.id, 0)}>
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
+                    </div>
+                ))}
+            </div>
+           )}
+        </CardContent>
+      </Card>
+
+      <Card className="w-full md:w-1/3 flex flex-col border-none shadow-lg ring-1 ring-gray-200 bg-white z-10 overflow-hidden h-full">
+        <CardHeader className="p-4 bg-gray-50 border-b flex-shrink-0">
+           <div className="flex items-center justify-between">
+              <CardTitle className="text-lg flex items-center gap-2"><ShoppingCart className="h-5 w-5" /> Carrinho</CardTitle>
+              {caixaStatus === 'aberto' ? <div className="px-3 py-1.5 rounded-full bg-green-100 text-green-700 text-xs font-bold uppercase flex items-center gap-2 border border-green-200"><span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-green-600"></span></span>Caixa Aberto</div> : <Button size="sm" variant="destructive" className="h-8 text-xs font-bold gap-2 animate-pulse shadow-sm" onClick={() => setIsCaixaModalOpen(true)} disabled={caixaStatus === 'loading'}><Lock className="h-3 w-3" /> ABRIR CAIXA</Button>}
+           </div>
+        </CardHeader>
+        
+        <CardContent className="flex-1 overflow-y-auto p-0 scrollbar-thin">
+            {cart.length === 0 ? <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-4 p-8 text-center opacity-50"><ShoppingCart className="h-16 w-16 bg-gray-100 p-4 rounded-full" /><p>Carrinho vazio</p></div> : (
+              <Table>
+                <TableHeader className="bg-white sticky top-0 z-10 shadow-sm"><TableRow><TableHead className="pl-4 h-10 text-xs uppercase">Item</TableHead><TableHead className="w-[80px] text-center h-10 text-xs uppercase">Qtd</TableHead><TableHead className="text-right pr-4 h-10 text-xs uppercase">Total</TableHead></TableRow></TableHeader>
+                <TableBody>{cart.map(item => (<TableRow key={item.id} className="group"><TableCell className="pl-4 font-medium py-2"><div className="flex flex-col"><span className="text-sm line-clamp-1">{item.nome}</span><span className="text-[10px] text-muted-foreground">Unit: R$ {Number(item.preco_venda).toFixed(2)}</span></div></TableCell><TableCell className="text-center p-0"><div className="flex items-center justify-center bg-gray-100 rounded-md mx-1 py-1"><Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateCartQuantity(item.id, item.quantidade_venda - 1)}><Minus className="h-3 w-3" /></Button><span className="text-xs w-6 font-bold">{item.quantidade_venda}</span><Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => updateCartQuantity(item.id, item.quantidade_venda + 1)}><Plus className="h-3 w-3" /></Button></div></TableCell><TableCell className="text-right pr-4 font-bold text-sm">R$ {(Number(item.preco_venda) * item.quantidade_venda).toFixed(2)}</TableCell></TableRow>))}</TableBody>
               </Table>
             )}
-          </CardContent>
-          <div className="p-4 border-t">
-            <div className="flex justify-between items-center text-2xl font-bold mb-4">
-              <span>Total</span>
-              <span>R$ {totalCompra.toFixed(2)}</span>
-            </div>
-            <Button 
-              className="w-full h-12 text-lg" 
-              onClick={() => setIsPaymentModalOpen(true)}
-              disabled={cart.length === 0 || isSubmitting || caixaStatus !== 'aberto'} // Desabilita se o caixa estiver fechado
-            >
-              {caixaStatus !== 'aberto' ? "Caixa Fechado" : "Finalizar Venda"}
-            </Button>
-          </div>
-        </Card>
-      </div>
+        </CardContent>
 
-      {/* Modal de Pagamento */}
+        <CardFooter className="flex flex-col p-0 border-t bg-gray-50 flex-shrink-0 z-20">
+             <div className="w-full p-4 flex justify-between items-center border-b border-dashed border-gray-300"><span className="text-sm font-medium text-muted-foreground uppercase">Total a Pagar</span><span className="text-3xl font-extrabold text-gray-900 tracking-tight">R$ {totalCompra.toFixed(2)}</span></div>
+             <div className="p-4 w-full bg-white"><Button className="w-full h-14 text-xl font-bold shadow-lg bg-green-600 hover:bg-green-700" onClick={() => setIsPaymentModalOpen(true)} disabled={cart.length === 0 || isSubmitting || caixaStatus !== 'aberto'}>{caixaStatus !== 'aberto' ? <span className="flex items-center gap-2"><Lock className="h-5 w-5" /> CAIXA FECHADO</span> : <span className="flex items-center gap-2"><DollarSign className="h-5 w-5" /> RECEBER</span>}</Button></div>
+        </CardFooter>
+      </Card>
+
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Finalizar Venda</DialogTitle>
-            <DialogDescription>
-              Total da Compra: <span className="font-bold text-primary text-lg">R$ {totalCompra.toFixed(2)}</span>
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <Label>Método de Pagamento</Label>
-            <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione..." />
-              </SelectTrigger> 
-              <SelectContent>
-                <SelectItem value="dinheiro"><Wallet className="inline h-4 w-4 mr-2" />Dinheiro</SelectItem>
-                <SelectItem value="pix"><Landmark className="inline h-4 w-4 mr-2" />Pix</SelectItem>
-                <SelectItem value="cartao_debito"><CreditCard className="inline h-4 w-4 mr-2" />Cartão de Débito</SelectItem>
-                <SelectItem value="cartao_credito"><CreditCard className="inline h-4 w-4 mr-2" />Cartão de Crédito</SelectItem>
-              </SelectContent>
-            </Select>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle className="text-center text-xl">Finalizar Venda</DialogTitle></DialogHeader>
+          <div className="flex flex-col items-center justify-center py-2"><span className="text-sm text-muted-foreground uppercase font-semibold">Valor Total</span><span className="text-4xl font-extrabold text-primary">R$ {totalCompra.toFixed(2)}</span></div>
+          <div className="space-y-4">
+             <div className="grid grid-cols-2 gap-3">
+                {[{ id: "dinheiro", label: "Dinheiro", icon: Wallet }, { id: "pix", label: "Pix", icon: Landmark }, { id: "cartao_debito", label: "Débito", icon: CreditCard }, { id: "cartao_credito", label: "Crédito", icon: CreditCard }].map((m) => (
+                    <Button key={m.id} variant={paymentMethod === m.id ? "default" : "outline"} className={`h-16 flex flex-col gap-1 border-2 ${paymentMethod === m.id ? 'border-primary bg-primary/10 text-primary' : 'hover:bg-gray-50'}`} onClick={() => { setPaymentMethod(m.id as PaymentMethod); if (m.id !== 'dinheiro') setAmountPaid(""); }}>
+                        <m.icon className="h-5 w-5" /><span className="font-bold text-xs">{m.label}</span>
+                    </Button>
+                ))}
+             </div>
+             {paymentMethod === 'dinheiro' && (
+                <div className="bg-gray-50 p-4 rounded-xl space-y-3 animate-in fade-in border">
+                    <div className="space-y-1.5"><Label className="text-xs uppercase font-bold text-muted-foreground">Valor Recebido</Label><div className="relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground text-lg">R$</span><Input type="number" placeholder="0.00" className="pl-10 h-12 text-xl font-bold bg-white" value={amountPaid} onChange={(e) => setAmountPaid(e.target.value)} autoFocus /></div></div>
+                    <div className="flex justify-between items-center pt-2 border-t border-dashed"><span className="font-semibold text-muted-foreground">Troco:</span><span className={`text-2xl font-bold ${troco >= 0 ? 'text-green-600' : 'text-gray-300'}`}>R$ {troco.toFixed(2)}</span></div>
+                </div>
+             )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsPaymentModalOpen(false)} disabled={isSubmitting}>Cancelar</Button>
-            <Button onClick={handleFinalizeSale} disabled={isSubmitting}>
-              {isSubmitting ? "Finalizando..." : "Confirmar Pagamento"}
-            </Button>
-          </DialogFooter>
+          <DialogFooter className="mt-2"><Button className="w-full h-12 text-lg font-bold" onClick={handleFinalizeSale} disabled={!paymentMethod || isSubmitting || (paymentMethod === 'dinheiro' && (parseFloat(amountPaid) || 0) < totalCompra)}>{isSubmitting ? "Processando..." : "CONFIRMAR PAGAMENTO"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* --- MODAL DE ABERTURA DE CAIXA --- */}
       <Dialog open={isCaixaModalOpen} onOpenChange={setIsCaixaModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Abrir Caixa</DialogTitle>
-            <DialogDescription>
-              Insira o valor inicial (suprimento) para abrir o caixa.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <Label htmlFor="valorAbertura">Valor de Abertura (R$)</Label>
-            <Input 
-              id="valorAbertura"
-              type="number"
-              placeholder="0,00"
-              value={valorAbertura}
-              onChange={(e) => setValorAbertura(e.target.value)}
-              disabled={isSubmittingCaixa}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCaixaModalOpen(false)} disabled={isSubmittingCaixa}>
-              Cancelar
-            </Button>
-            <Button onClick={handleOpenCaixa} disabled={isSubmittingCaixa}>
-              {isSubmittingCaixa ? "Abrindo..." : "Confirmar Abertura"}
-            </Button>
-          </DialogFooter>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader><DialogTitle>Abertura de Caixa</DialogTitle><DialogDescription>Insira o valor inicial.</DialogDescription></DialogHeader>
+          <div className="py-4"><Label>Valor Inicial (R$)</Label><div className="relative mt-2"><span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground">R$</span><Input type="number" placeholder="0,00" className="pl-10 text-xl font-bold h-14" value={valorAbertura} onChange={(e) => setValorAbertura(e.target.value)} disabled={isSubmittingCaixa} autoFocus /></div></div>
+          <DialogFooter><Button variant="outline" onClick={() => setIsCaixaModalOpen(false)}>Cancelar</Button><Button onClick={handleOpenCaixa} disabled={isSubmittingCaixa}>Confirmar</Button></DialogFooter>
         </DialogContent>
       </Dialog>
-      
     </div>
   );
 }

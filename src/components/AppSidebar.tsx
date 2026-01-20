@@ -4,7 +4,7 @@ import {
   ShoppingCart,
   History,
   LogOut,
-  Zap, // 1. IMPORTAR O ÍCONE (Zap para "rápido")
+  Zap,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import {
@@ -30,7 +30,6 @@ const adminItems = [
   { title: "Vendas", url: "/admin/vendas", icon: History },
 ];
 
-// 2. ADICIONAR O NOVO ITEM DE MENU
 const colaboradorItems = [
   { title: "Caixa Rápido", url: "/pdv/caixa-rapido", icon: Zap },
   { title: "Comandas", url: "/pdv", icon: ShoppingCart },
@@ -53,50 +52,49 @@ export function AppSidebar() {
   return (
     <Sidebar
       collapsible="icon"
-      // Fundo sólido no mobile, transparente no desktop
-      className="bg-white dark:bg-gray-900 md:bg-transparent dark:md:bg-transparent"
+      className="bg-white dark:bg-gray-900 md:bg-transparent dark:md:bg-transparent border-r-0"
     >
       {/* Header */}
-      <SidebarHeader className="border-b border-border p-4">
-        <div className="flex items-center gap-3">
+      <SidebarHeader className="p-4 pb-2">
+        <div className="flex items-center gap-3 px-1">
           <img
             src="/logo.png"
             alt="Logo da Adega"
-            className={`${isCollapsed ? "h-6 w-6" : "h-8 w-8"} object-contain`}
+            className={`${isCollapsed ? "h-8 w-8" : "h-9 w-9"} object-contain transition-all`}
           />
-          {/* O ERRO ESTAVA AQUI, AGORA ESTÁ CORRIGIDO. */}
           {!isCollapsed && (
-            <div>
-              <h2 className="font-bold text-lg">Adega do Sheik</h2>
-              <p className="text-xs text-muted-foreground">
-                {userType === "admin" ? "Admin" : "Colaborador"}
-              </p>
+            <div className="flex flex-col">
+              <span className="font-bold text-lg leading-none tracking-tight text-gray-900 dark:text-white">Adega do Sheik</span>
+              <span className="text-xs text-gray-500 font-medium mt-1">
+                {userType === "admin" ? "Painel Admin" : "Área do Colaborador"}
+              </span>
             </div>
           )}
         </div>
       </SidebarHeader>
 
       {/* Conteúdo do menu */}
-      <SidebarContent>
+      <SidebarContent className="px-2 mt-4">
         <SidebarGroup>
-          <SidebarGroupLabel>
-            {isCollapsed ? "Menu" : "Navegação"}
+          <SidebarGroupLabel className="px-4 mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+            {isCollapsed ? "Menu" : "Navegação Principal"}
           </SidebarGroupLabel>
 
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className="gap-1">
               {items.map((item) => (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
+                  <SidebarMenuButton asChild tooltip={item.title} className="h-auto p-0 hover:bg-transparent ring-0 outline-none">
                     <NavLink
                       to={item.url}
-                      // `end` é importante para o NavLink da raiz ("/pdv")
-                      // não ficar ativo em "/pdv/historico" ou "/pdv/caixa-rapido"
                       end={item.url === "/pdv"}
                       className={({ isActive }) =>
-                        isActive
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                          : "hover:bg-sidebar-accent/50"
+                        `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 w-full
+                        ${
+                          isActive
+                            ? "bg-primary text-secondary-foreground shadow-md shadow-secondary/20" // Ativo: Cor do tema + Texto contraste (Branco ou Preto)
+                            : "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-blue-300 dark:hover:text-white" // Inativo: Cinza Escuro (visível)
+                        }`
                       }
                     >
                       <item.icon className="h-4 w-4" />
@@ -111,23 +109,23 @@ export function AppSidebar() {
       </SidebarContent>
 
       {/* Rodapé da sidebar */}
-      <SidebarFooter className="border-t border-border p-4">
+      <SidebarFooter className="p-4 border-t border-border/50 bg-gray-50/50 dark:bg-gray-900/50 mt-auto">
         {!isCollapsed && (
-          <div className="mb-3">
-            <p className="text-sm font-medium truncate">{userName}</p>
-            <p className="text-xs text-muted-foreground">
+          <div className="mb-4 px-1">
+            <p className="text-sm font-bold truncate text-gray-900 dark:text-gray-100">{userName}</p>
+            <p className="text-xs text-gray-500">
               {userType === "admin" ? "Administrador" : "Colaborador"}
             </p>
           </div>
         )}
         <Button
-          variant="ghost"
+          variant="outline"
           onClick={handleLogout}
-          className="w-full justify-start"
+          className={`w-full justify-start border-gray-200 dark:border-gray-800 text-gray-700 dark:text-gray-300 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400 transition-colors ${isCollapsed ? "px-0 justify-center" : ""}`}
           size={isCollapsed ? "icon" : "default"}
         >
           <LogOut className="h-4 w-4" />
-          {!isCollapsed && <span className="ml-2">Sair</span>}
+          {!isCollapsed && <span className="ml-2">Sair do Sistema</span>}
         </Button>
       </SidebarFooter>
     </Sidebar>

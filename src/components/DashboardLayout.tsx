@@ -8,18 +8,17 @@ interface DashboardLayoutProps {
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-white dark:bg-gray-950">
-        {/* Sidebar fixa e com fundo sólido */}
+      <div className="min-h-screen flex w-full bg-gray-50/50 dark:bg-gray-950">
         <AppSidebar />
 
         <main className="flex-1 flex flex-col">
-          {/* Header com cor sólida, sombra e separação */}
-          <header className="sticky top-0 z-10 flex h-14 items-center gap-4 border-b bg-white dark:bg-gray-900 px-4 shadow-sm">
-            <SidebarTrigger />
+          {/* MODERNIZAÇÃO: backdrop-blur e bg-white/80 para efeito de vidro */}
+          <header className="sticky top-0 z-10 flex h-16 items-center gap-4 border-b bg-white/80 dark:bg-gray-900/80 backdrop-blur-md px-6 shadow-sm transition-all">
+            <SidebarTrigger className="hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full h-10 w-10 transition-colors" />
           </header>
 
-          {/* Conteúdo principal */}
-          <div className="flex-1 p-6 bg-gray-50 dark:bg-gray-950">
+          {/* Ajuste de padding para respirar mais */}
+          <div className="flex-1 p-6 md:p-8 overflow-y-auto">
             {children}
           </div>
         </main>
