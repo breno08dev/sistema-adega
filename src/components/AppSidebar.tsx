@@ -37,7 +37,7 @@ const colaboradorItems = [
 ];
 
 export function AppSidebar() {
-  const { state } = useSidebar();
+  const { state, isMobile, setOpenMobile } = useSidebar();
   const { userType, userName, signOut } = useAuth();
   const isCollapsed = state === "collapsed";
 
@@ -88,6 +88,7 @@ export function AppSidebar() {
                     <NavLink
                       to={item.url}
                       end={item.url === "/pdv"}
+                      onClick={() => isMobile && setOpenMobile(false)}
                       className={({ isActive }) =>
                         `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-all duration-200 w-full
                         ${
