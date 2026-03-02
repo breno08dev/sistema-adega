@@ -150,9 +150,9 @@ export default function CollaboratorHistory() {
   // --- 2. CÁLCULOS E HISTÓRICO UNIFICADO ---
   const { 
     totalVendas, 
-    totalEntradas, 
-    totalSaidas, 
-    totalDinheiro, 
+    totalEntradasAbertura, 
+    totalSaidasSangria, 
+    totalDinheiroVendas, 
     totalPix, 
     totalCartao, 
     saldoFisico 
@@ -177,24 +177,34 @@ export default function CollaboratorHistory() {
       }
     });
 
-    let tEntradas = 0; let tSaidas = 0;
+    let tAbertura = 0; let tSaidas = 0;
     movements.forEach(mov => {
-      if (mov.tipo === 'entrada') tEntradas += Number(mov.valor);
-      else tSaidas += Number(mov.valor);
+      // Diferenciamos o que é entrada de abertura/reforço e o que é saída de sangria
+      if (mov.tipo === 'entrada') tAbertura += Number(mov.valor);
+      else if (mov.descricao !== 'Fechamento de Caixa') {
+        // Ignoramos a saída automática do fechamento para não zerar o saldo antes da hora na tela
+        tSaidas += Number(mov.valor);
+      }
     });
 
-    const saldoFisico = tDinheiro + tEntradas - tSaidas;
+    // LOGICA CORRIGIDA: Abertura + Vendas em Dinheiro - Sangrias
+    const saldoFinal = tAbertura + tDinheiro - tSaidas;
 
     return { 
-        totalVendas: tVendas, totalEntradas: tEntradas, totalSaidas: tSaidas,
-        totalDinheiro: tDinheiro, totalPix: tPix, totalCartao: tCartao, saldoFisico: saldoFisico
+        totalVendas: tVendas, 
+        totalEntradasAbertura: tAbertura, 
+        totalSaidasSangria: tSaidas,
+        totalDinheiroVendas: tDinheiro, 
+        totalPix: tPix, 
+        totalCartao: tCartao, 
+        saldoFisico: saldoFinal
     };
   }, [sales, movements]);
 
   // FUNÇÕES HELPER PARA PAGAMENTO
   const getPaymentText = (sale: Sale): string => {
     if (sale.sale_payments && sale.sale_payments.length > 0) {
-        return "Misto (" + sale.sale_payments.map(p => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
+        return "Dividi (" + sale.sale_payments.map(p => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
     } else if (sale.metodo_pagamento) {
         return paymentMethodLabels[sale.metodo_pagamento];
     }
@@ -218,11 +228,8 @@ export default function CollaboratorHistory() {
     return <Badge variant="destructive">N/A</Badge>;
   };
 
-  // --- NOVA LÓGICA: JUNTAR VENDAS E SANGRIAS NUMA ÚNICA LISTA DE TEMPO ---
   const historicoUnificado = useMemo(() => {
     const itens = [];
-
-    // Adiciona as Vendas
     sales.forEach(sale => {
         itens.push({
             id: sale.id,
@@ -234,8 +241,6 @@ export default function CollaboratorHistory() {
             valor: Number(sale.total) || 0,
         });
     });
-
-    // Adiciona as Sangrias (Movimentos de saída que contém a tag [Sangria])
     movements.forEach(mov => {
         if (mov.tipo === 'saida' && mov.descricao.includes('[Sangria]')) {
             itens.push({
@@ -249,70 +254,50 @@ export default function CollaboratorHistory() {
             });
         }
     });
-
-    // Ordenar do mais recente para o mais antigo
     return itens.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
   }, [sales, movements]);
 
-
-  // --- 3. AÇÕES (PDF, FECHAR E SANGRIA) ---
   const generatePDF = () => {
     if (!caixaAberto) return; 
     const doc = new jsPDF();
     const today = format(new Date(), "dd/MM/yyyy HH:mm", { locale: ptBR });
-    
     doc.text("Relatório de Caixa", 14, 16);
     doc.setFontSize(10);
     doc.text(`Gerado em: ${today}`, 14, 22);
     doc.text(`Colaborador: ${userName || user?.email}`, 14, 28);
-    
-    // Tabela do PDF usando o Histórico Unificado
     const historyBody = historicoUnificado.map(item => [
       format(new Date(item.data), "HH:mm"),
       item.descricao,
       item.pagamentoTexto, 
       `${item.tipo === 'sangria' ? '- ' : ''}R$ ${item.valor.toFixed(2)}`
     ]);
-    
     autoTable(doc, {
       startY: 35,
       head: [['Hora', 'Cliente / Descrição', 'Pagamento/Tipo', 'Valor']], 
       body: historyBody,
     });
-
     const lastY = (doc as any).lastAutoTable.finalY + 10;
     doc.text("Resumo Financeiro:", 14, lastY);
     autoTable(doc, {
         startY: lastY + 5,
         body: [
-            ['Dinheiro (Vendas)', `R$ ${totalDinheiro.toFixed(2)}`],
+            ['Dinheiro (Vendas)', `R$ ${totalDinheiroVendas.toFixed(2)}`],
             ['Pix', `R$ ${totalPix.toFixed(2)}`],
             ['Cartão', `R$ ${totalCartao.toFixed(2)}`],
-            ['Abertura/Entradas', `R$ ${totalEntradas.toFixed(2)}`],
-            ['Saídas/Sangrias', `R$ ${totalSaidas.toFixed(2)}`],
+            ['Abertura/Entradas', `R$ ${totalEntradasAbertura.toFixed(2)}`],
+            ['Saídas/Sangrias', `R$ ${totalSaidasSangria.toFixed(2)}`],
             ['SALDO FINAL (GAVETA)', `R$ ${saldoFisico.toFixed(2)}`],
         ]
     });
-
     doc.save(`Relatorio_Caixa_${format(new Date(), "dd-MM")}.pdf`);
   };
 
   const handleSangria = async () => {
     if (!user || !caixaAberto) return;
-
     const valorNum = parseFloat(sangriaValor.replace(",", "."));
-    if (isNaN(valorNum) || valorNum <= 0) {
-      return toast.error("Por favor, insira um valor válido maior que zero.");
-    }
-
-    if (valorNum > saldoFisico) {
-      return toast.error(`A sangria não pode ser maior que o saldo na gaveta (R$ ${saldoFisico.toFixed(2)}).`);
-    }
-
-    if (!sangriaDescricao.trim()) {
-      return toast.error("A descrição da sangria é obrigatória.");
-    }
-
+    if (isNaN(valorNum) || valorNum <= 0) return toast.error("Por favor, insira um valor válido maior que zero.");
+    if (valorNum > saldoFisico) return toast.error(`A sangria não pode ser maior que o saldo na gaveta (R$ ${saldoFisico.toFixed(2)}).`);
+    if (!sangriaDescricao.trim()) return toast.error("A descrição da sangria é obrigatória.");
     setIsSubmittingSangria(true);
     try {
       const { error } = await supabase.from('movements').insert({
@@ -321,15 +306,11 @@ export default function CollaboratorHistory() {
         valor: valorNum,
         descricao: `[Sangria] ${sangriaDescricao}`
       });
-
       if (error) throw error;
-
       toast.success("Sangria registrada com sucesso!");
       setIsSangriaModalOpen(false);
       setSangriaValor("");
       setSangriaDescricao("");
-      
-      // Recarrega os movimentos para atualizar a Gaveta e Saídas na tela
       loadMovements(caixaAberto.data_abertura); 
     } catch (e: any) {
       toast.error("Erro ao registrar sangria: " + e.message);
@@ -340,25 +321,20 @@ export default function CollaboratorHistory() {
   
   const handleConfirmCloseCaixa = async () => {
     if (!user || !caixaAberto) return; 
-
-    const valorFechamento = totalVendas + totalEntradas - totalSaidas;
-
+    const valorFechamento = saldoFisico; // O valor que sai no fechamento é o saldo físico atual
     await supabase.from('movements').insert({
       responsavel_id: user.id,
       tipo: 'saida',
       valor: valorFechamento, 
       descricao: 'Fechamento de Caixa'
     });
-
     const { error } = await supabase.from('caixas').update({
       status: 'fechado',
       valor_fechamento: valorFechamento,
       data_fechamento: new Date().toISOString()
     }).eq('id', caixaAberto.id);
-    
-    if (error) {
-      toast.error("Erro ao fechar caixa");
-    } else {
+    if (error) toast.error("Erro ao fechar caixa");
+    else {
       toast.success("Caixa fechado com sucesso!");
       setIsCloseCaixaAlertOpen(false); 
       checkCaixaAberto(); 
@@ -384,12 +360,10 @@ export default function CollaboratorHistory() {
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Receipt className="h-6 w-6 text-primary" /> Meu Caixa</h1>
           <p className="text-muted-foreground text-sm flex items-center gap-2 mt-1"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>Aberto em: {format(new Date(caixaAberto.data_abertura), "dd/MM 'às' HH:mm")}</p>
         </div>
-        
         <div className="flex items-center gap-2">
             <Button variant="outline" className="text-red-600 border-red-200 bg-red-50 hover:bg-red-100 shadow-sm" onClick={() => setIsSangriaModalOpen(true)}>
                 <MinusCircle className="h-4 w-4 mr-2" /> Sangria
             </Button>
-
             <AlertDialog open={isCloseCaixaAlertOpen} onOpenChange={setIsCloseCaixaAlertOpen}>
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -402,12 +376,11 @@ export default function CollaboratorHistory() {
                 <AlertDialogTrigger asChild><DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer"><Lock className="h-4 w-4 mr-2" /> Fechar Caixa</DropdownMenuItem></AlertDialogTrigger>
                 </DropdownMenuContent>
             </DropdownMenu>
-            
             <AlertDialogContent>
                 <AlertDialogHeader><AlertDialogTitle>Fechar Caixa?</AlertDialogTitle>
                 <AlertDialogDescription>
                     Isso encerrará seu turno e registrará a saída do valor total.
-                    <div className="mt-4 p-3 bg-muted rounded-md text-sm font-medium text-center">Valor Final Estimado: R$ {(totalVendas + totalEntradas - totalSaidas).toFixed(2)}</div>
+                    <div className="mt-4 p-3 bg-muted rounded-md text-sm font-medium text-center">Valor Final Estimado: R$ {saldoFisico.toFixed(2)}</div>
                 </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={handleConfirmCloseCaixa} className="bg-red-600 hover:bg-red-700">Confirmar Fechamento</AlertDialogAction></AlertDialogFooter>
@@ -417,8 +390,8 @@ export default function CollaboratorHistory() {
       </div>
 
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-l-4 border-l-emerald-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Gaveta (Dinheiro)</CardTitle><div className="h-8 w-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center"><Wallet className="h-4 w-4 text-emerald-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {saldoFisico.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Físico disponível</p></CardContent></Card>
-        <Card className="border-l-4 border-l-green-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Dinheiro</CardTitle><div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center"><DollarSign className="h-4 w-4 text-green-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {totalDinheiro.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Entrada em espécie</p></CardContent></Card>
+        <Card className="border-l-4 border-l-emerald-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Gaveta (Dinheiro)</CardTitle><div className="h-8 w-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center"><Wallet className="h-4 w-4 text-emerald-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {saldoFisico.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Físico disponível (Abertura + Vendas Dinheiro - Sangrias)</p></CardContent></Card>
+        <Card className="border-l-4 border-l-green-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Dinheiro</CardTitle><div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center"><DollarSign className="h-4 w-4 text-green-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {totalDinheiroVendas.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Entrada em espécie deste turno</p></CardContent></Card>
         <Card className="border-l-4 border-l-cyan-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Pix</CardTitle><div className="h-8 w-8 rounded-full bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center"><Smartphone className="h-4 w-4 text-cyan-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {totalPix.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Transf. Digital</p></CardContent></Card>
         <Card className="border-l-4 border-l-purple-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Cartão</CardTitle><div className="h-8 w-8 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center"><CreditCard className="h-4 w-4 text-purple-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {totalCartao.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Crédito / Débito</p></CardContent></Card>
       </div>
@@ -426,45 +399,24 @@ export default function CollaboratorHistory() {
       <div className="flex flex-wrap gap-4 text-sm px-1 py-2 bg-gray-50/50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-800">
          <div className="flex items-center gap-2"><div className="p-1 bg-blue-100 rounded text-blue-600"><TrendingUp className="h-3 w-3" /></div><span className="text-muted-foreground">Total Vendido: <strong className="text-foreground">R$ {totalVendas.toFixed(2)}</strong></span></div>
          <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 self-center hidden sm:block"></div>
-         <div className="flex items-center gap-2"><div className="p-1 bg-green-100 rounded text-green-600"><ArrowUpCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Abertura: <strong className="text-foreground">R$ {totalEntradas.toFixed(2)}</strong></span></div>
+         <div className="flex items-center gap-2"><div className="p-1 bg-green-100 rounded text-green-600"><ArrowUpCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Abertura: <strong className="text-foreground">R$ {totalEntradasAbertura.toFixed(2)}</strong></span></div>
          <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 self-center hidden sm:block"></div>
-         <div className="flex items-center gap-2"><div className="p-1 bg-red-100 rounded text-red-600"><MinusCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Saídas: <strong className="text-foreground">R$ {totalSaidas.toFixed(2)}</strong></span></div>
+         <div className="flex items-center gap-2"><div className="p-1 bg-red-100 rounded text-red-600"><MinusCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Saídas: <strong className="text-foreground">R$ {totalSaidasSangria.toFixed(2)}</strong></span></div>
       </div>
 
       <Card className="border shadow-sm ring-1 ring-gray-200 dark:ring-gray-800 overflow-hidden">
         <CardHeader className="bg-gray-50/50 dark:bg-gray-900/50 border-b py-3 px-6"><CardTitle className="text-base font-semibold">Histórico de Movimentações</CardTitle></CardHeader>
         <CardContent className="p-0">
           <Table>
-            <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                    <TableHead className="pl-6 w-[100px]">Horário</TableHead>
-                    <TableHead>Cliente / Descrição</TableHead>
-                    <TableHead>Pagamento / Tipo</TableHead>
-                    <TableHead className="text-right pr-6">Valor Total</TableHead>
-                    <TableHead className="w-[100px]"></TableHead>
-                </TableRow>
-            </TableHeader>
+            <TableHeader><TableRow className="hover:bg-transparent"><TableHead className="pl-6 w-[100px]">Horário</TableHead><TableHead>Cliente / Descrição</TableHead><TableHead>Pagamento / Tipo</TableHead><TableHead className="text-right pr-6">Valor Total</TableHead><TableHead className="w-[100px]"></TableHead></TableRow></TableHeader>
             <TableBody>
-              {historicoUnificado.length === 0 && (<TableRow><TableCell colSpan={5} className="text-center py-10 text-muted-foreground"><div className="flex flex-col items-center gap-2"><Receipt className="h-8 w-8 opacity-20" /><span>Nenhuma movimentação neste turno.</span></div></TableCell></TableRow>)}
               {historicoUnificado.map((item) => (
                 <TableRow key={item.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/50 transition-colors align-top">
-                  <TableCell className="pl-6 font-medium text-muted-foreground tabular-nums pt-4">
-                    {format(new Date(item.data), "HH:mm")}
-                  </TableCell>
-                  <TableCell className="pt-4">
-                    <span className={`font-medium ${item.tipo === 'sangria' ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>
-                      {item.descricao}
-                    </span>
-                  </TableCell>
-                  <TableCell className="pt-3 pb-3">
-                    {item.pagamentoBadge}
-                  </TableCell>
-                  <TableCell className={`text-right pr-6 font-bold tabular-nums pt-4 ${item.tipo === 'sangria' ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>
-                    {item.tipo === 'sangria' ? '- ' : ''}R$ {item.valor.toFixed(2)}
-                  </TableCell>
-                  <TableCell className="pt-3">
-                    {item.tipo === 'venda' && <SaleDetailsDialog saleId={item.id} />}
-                  </TableCell>
+                  <TableCell className="pl-6 font-medium text-muted-foreground tabular-nums pt-4">{format(new Date(item.data), "HH:mm")}</TableCell>
+                  <TableCell className="pt-4"><span className={`font-medium ${item.tipo === 'sangria' ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>{item.descricao}</span></TableCell>
+                  <TableCell className="pt-3 pb-3">{item.pagamentoBadge}</TableCell>
+                  <TableCell className={`text-right pr-6 font-bold tabular-nums pt-4 ${item.tipo === 'sangria' ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>{item.tipo === 'sangria' ? '- ' : ''}R$ {item.valor.toFixed(2)}</TableCell>
+                  <TableCell className="pt-3">{item.tipo === 'venda' && <SaleDetailsDialog saleId={item.id} />}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -472,48 +424,21 @@ export default function CollaboratorHistory() {
         </CardContent>
       </Card>
 
-      {/* MODAL DE SANGRIA */}
       <Dialog open={isSangriaModalOpen} onOpenChange={setIsSangriaModalOpen}>
         <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-red-600">
-              <MinusCircle className="h-5 w-5" /> Nova Sangria (Retirada)
-            </DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle className="flex items-center gap-2 text-red-600"><MinusCircle className="h-5 w-5" /> Nova Sangria (Retirada)</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
               <Label>Valor da Retirada (R$)</Label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground">R$</span>
-                <Input 
-                  type="number" 
-                  value={sangriaValor} 
-                  onChange={(e) => setSangriaValor(e.target.value)} 
-                  placeholder="0.00" 
-                  className="pl-9 h-12 font-bold text-lg"
-                  autoFocus
-                />
+                <Input type="number" value={sangriaValor} onChange={(e) => setSangriaValor(e.target.value)} placeholder="0.00" className="pl-9 h-12 font-bold text-lg" autoFocus />
               </div>
-              <p className="text-xs text-muted-foreground">
-                 Saldo disponível na gaveta: <strong>R$ {saldoFisico.toFixed(2)}</strong>
-              </p>
+              <p className="text-xs text-muted-foreground">Saldo disponível na gaveta: <strong>R$ {saldoFisico.toFixed(2)}</strong></p>
             </div>
-            <div className="space-y-2">
-              <Label>Descrição / Motivo</Label>
-              <Input 
-                value={sangriaDescricao} 
-                onChange={(e) => setSangriaDescricao(e.target.value)} 
-                placeholder="Ex: Pagamento fornecedor, Retirada cofre..." 
-                className="h-10"
-              />
-            </div>
+            <div className="space-y-2"><Label>Descrição / Motivo</Label><Input value={sangriaDescricao} onChange={(e) => setSangriaDescricao(e.target.value)} placeholder="Ex: Pagamento fornecedor, Retirada cofre..." className="h-10" /></div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsSangriaModalOpen(false)}>Cancelar</Button>
-            <Button className="bg-red-600 hover:bg-red-700" onClick={handleSangria} disabled={isSubmittingSangria}>
-              {isSubmittingSangria ? "Registrando..." : "Confirmar Sangria"}
-            </Button>
-          </DialogFooter>
+          <DialogFooter><Button variant="outline" onClick={() => setIsSangriaModalOpen(false)}>Cancelar</Button><Button className="bg-red-600 hover:bg-red-700" onClick={handleSangria} disabled={isSubmittingSangria}>{isSubmittingSangria ? "Registrando..." : "Confirmar Sangria"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
@@ -524,19 +449,16 @@ function SaleDetailsDialog({ saleId }: { saleId: string }) {
   const [isOpen, setIsOpen] = useState(false);
   const [items, setItems] = useState<SaleItem[]>([]);
   const [loading, setLoading] = useState(false);
-
   useEffect(() => {
     const loadDetails = async () => {
         if (!isOpen) return;
         setLoading(true);
         const { data, error } = await supabase.from('sale_items').select('*, products(nome)').eq('venda_id', saleId);
-        if (error) toast.error("Erro ao carregar detalhes");
-        else setItems(data as unknown as SaleItem[]);
+        if (!error && data) setItems(data as unknown as SaleItem[]);
         setLoading(false);
     };
     loadDetails();
   }, [isOpen, saleId]);
-
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild><Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-primary">Detalhes</Button></DialogTrigger>

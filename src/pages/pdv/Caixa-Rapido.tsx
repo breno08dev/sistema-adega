@@ -73,7 +73,15 @@ export default function CaixaRapido() {
   }, [products, searchTerm, selectedCategory]);
 
   const addToCart = (product: Product) => {
-    if (caixaStatus !== 'aberto') return toast.error("Caixa fechado!");
+    // TRAVA DE SEGURANÇA ATUALIZADA
+    if (caixaStatus !== 'aberto') {
+        toast.error("Caixa Fechado", {
+            description: "É necessário abrir o caixa para iniciar as vendas."
+        });
+        setIsCaixaModalOpen(true);
+        return;
+    }
+
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === product.id);
       if (existingItem) return prevCart.map(item => item.id === product.id ? { ...item, quantidade_venda: item.quantidade_venda + 1 } : item);
@@ -123,13 +131,11 @@ export default function CaixaRapido() {
       const { error: itemsError } = await supabase.from('sale_items').insert(saleItems);
       if (itemsError) throw itemsError;
 
-      // --- CORREÇÃO DO TROCO AQUI ---
       let remainingToPay = totalCompra;
       const paymentInserts = [];
       
       for (const p of payments) {
           if (remainingToPay <= 0) break;
-          // Math.min garante que ele nunca salve no banco um valor maior que o que falta pagar
           const valToSave = Math.min(p.value, remainingToPay);
           paymentInserts.push({ 
               venda_id: saleData.id, 
@@ -142,8 +148,7 @@ export default function CaixaRapido() {
       const { error: payError } = await supabase.from('sale_payments').insert(paymentInserts);
       
       if (payError) {
-          toast.error("Venda salva, mas falhou ao dividir: " + payError.message);
-          console.error("ERRO COMPLETO DO BANCO:", payError);
+          toast.error("Erro na divisão: " + payError.message);
       } else {
           toast.success("Venda finalizada com sucesso!");
       }
@@ -169,16 +174,35 @@ export default function CaixaRapido() {
   const paymentLabels: Record<string, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito" };
 
   return (
-    <div className="flex h-[calc(100vh-5rem)] gap-4 overflow-hidden">
+    <div className="flex h-[calc(100vh-5rem)] gap-4 overflow-hidden p-2 md:p-0">
       <Card className="flex-1 md:w-2/3 flex flex-col border-none shadow-sm ring-1 ring-gray-200 dark:ring-gray-800 bg-white dark:bg-gray-900 overflow-hidden">
-        <CardHeader className="p-4 border-b space-y-4 flex-shrink-0"><div className="flex justify-between items-center"><h1 className="text-xl font-bold flex items-center gap-2"><Package className="h-5 w-5 text-primary" /> Produtos</h1><Badge variant="outline" className="px-3 py-1 bg-gray-100">{filteredProducts.length} itens</Badge></div><div className="flex gap-2"><div className="relative flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input placeholder="Buscar..." className="pl-9 bg-gray-50" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div><Select value={selectedCategory} onValueChange={setSelectedCategory}><SelectTrigger className="w-[180px] bg-gray-50"><SelectValue placeholder="Categoria" /></SelectTrigger><SelectContent><SelectItem value="all">Todas</SelectItem>{categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.nome}</SelectItem>)}</SelectContent></Select></div></CardHeader>
+        <CardHeader className="p-4 border-b space-y-4 flex-shrink-0">
+            <div className="flex justify-between items-center">
+                <h1 className="text-xl font-bold flex items-center gap-2"><Package className="h-5 w-5 text-primary" /> Produtos</h1>
+                <Badge variant="outline" className="px-3 py-1 bg-gray-100">{filteredProducts.length} itens</Badge>
+            </div>
+            <div className="flex flex-col md:flex-row gap-2">
+                <div className="relative flex-1">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input placeholder="Buscar..." className="pl-9 bg-gray-50 h-10" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                </div>
+                <Select value={selectedCategory} onValueChange={setSelectedCategory}>
+                    <SelectTrigger className="w-full md:w-[180px] bg-gray-50 h-10"><SelectValue placeholder="Categoria" /></SelectTrigger>
+                    <SelectContent><SelectItem value="all">Todas</SelectItem>{categories.map(cat => <SelectItem key={cat.id} value={cat.id}>{cat.nome}</SelectItem>)}</SelectContent>
+                </Select>
+            </div>
+        </CardHeader>
         <CardContent className="flex-1 overflow-y-auto p-4 bg-gray-50/50">
            {loading ? <div className="flex items-center justify-center h-full text-muted-foreground">Carregando...</div> : (
             <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                 {filteredProducts.map(product => (
-                    <div key={product.id} className={`group relative bg-white rounded-xl border p-3 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col justify-between h-[130px] ${product.quantidade <= 0 ? 'opacity-60 grayscale' : 'hover:border-primary/50'}`} onClick={() => product.quantidade > 0 && caixaStatus === 'aberto' && addToCart(product)}>
+                    <div 
+                        key={product.id} 
+                        className={`group relative bg-white rounded-xl border p-3 shadow-sm hover:shadow-md transition-all cursor-pointer flex flex-col justify-between h-[130px] ${product.quantidade <= 0 || caixaStatus !== 'aberto' ? 'opacity-60 grayscale hover:border-red-200' : 'hover:border-primary/50'}`} 
+                        onClick={() => addToCart(product)}
+                    >
                         <div className="flex flex-col gap-1"><span className="text-[10px] uppercase font-bold text-muted-foreground truncate">{product.categories?.nome}</span><span className="font-semibold text-sm leading-tight line-clamp-2">{product.nome}</span></div>
-                        <div className="flex justify-between items-end mt-2"><div className="flex flex-col"><span className="text-[10px] text-muted-foreground">Estoque: {product.quantidade}</span><span className="text-lg font-bold text-primary">R$ {Number(product.preco_venda).toFixed(2)}</span></div><div className={`h-8 w-8 rounded-full flex items-center justify-center transition-colors ${product.quantidade <= 0 ? 'bg-gray-100 text-gray-400' : 'bg-gray-100 text-gray-600 group-hover:bg-primary group-hover:text-white'}`}><Plus className="h-4 w-4" /></div></div>
+                        <div className="flex justify-between items-end mt-2"><div className="flex flex-col"><span className="text-[10px] text-muted-foreground">Estoque: {product.quantidade}</span><span className="text-lg font-bold text-primary">R$ {Number(product.preco_venda).toFixed(2)}</span></div><div className={`h-8 w-8 rounded-full flex items-center justify-center transition-colors ${caixaStatus !== 'aberto' ? 'bg-red-50 text-red-400' : 'bg-gray-100 text-gray-600 group-hover:bg-primary group-hover:text-white'}`}>{caixaStatus !== 'aberto' ? <Lock className="h-4 w-4" /> : <Plus className="h-4 w-4" />}</div></div>
                     </div>
                 ))}
             </div>
@@ -187,7 +211,21 @@ export default function CaixaRapido() {
       </Card>
 
       <Card className="w-full md:w-1/3 flex flex-col border-none shadow-lg ring-1 ring-gray-200 bg-white z-10 overflow-hidden h-full">
-        <CardHeader className="p-4 bg-gray-50 border-b flex-shrink-0"><div className="flex items-center justify-between"><CardTitle className="text-lg flex items-center gap-2"><ShoppingCart className="h-5 w-5" /> Carrinho</CardTitle>{caixaStatus === 'aberto' ? <div className="px-3 py-1.5 rounded-full bg-green-100 text-green-700 text-xs font-bold uppercase flex items-center gap-2 border border-green-200"><span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-green-600"></span></span>Caixa Aberto</div> : <Button size="sm" variant="destructive" className="h-8 text-xs font-bold gap-2 animate-pulse shadow-sm" onClick={() => setIsCaixaModalOpen(true)} disabled={caixaStatus === 'loading'}><Lock className="h-3 w-3" /> ABRIR CAIXA</Button>}</div></CardHeader>
+        <CardHeader className="p-4 bg-gray-50 border-b flex-shrink-0">
+            <div className="flex items-center justify-between">
+                <CardTitle className="text-lg flex items-center gap-2"><ShoppingCart className="h-5 w-5" /> Carrinho</CardTitle>
+                {caixaStatus === 'aberto' ? (
+                    <div className="px-3 py-1.5 rounded-full bg-green-100 text-green-700 text-xs font-bold uppercase flex items-center gap-2 border border-green-200">
+                        <span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-green-600"></span></span>
+                        Aberto
+                    </div>
+                ) : (
+                    <Button size="sm" variant="destructive" className="h-8 text-xs font-bold gap-2 animate-pulse" onClick={() => setIsCaixaModalOpen(true)} disabled={caixaStatus === 'loading'}>
+                        <Lock className="h-3 w-3" /> ABRIR CAIXA
+                    </Button>
+                )}
+            </div>
+        </CardHeader>
         <CardContent className="flex-1 overflow-y-auto p-0 scrollbar-thin">
             {cart.length === 0 ? <div className="flex flex-col items-center justify-center h-full text-muted-foreground space-y-4 p-8 text-center opacity-50"><ShoppingCart className="h-16 w-16 bg-gray-100 p-4 rounded-full" /><p>Carrinho vazio</p></div> : (
               <Table><TableHeader className="bg-white sticky top-0 z-10 shadow-sm"><TableRow><TableHead className="pl-4 h-10 text-xs uppercase">Item</TableHead><TableHead className="w-[80px] text-center h-10 text-xs uppercase">Qtd</TableHead><TableHead className="text-right pr-4 h-10 text-xs uppercase">Total</TableHead></TableRow></TableHeader>
@@ -195,7 +233,21 @@ export default function CaixaRapido() {
               </Table>
             )}
         </CardContent>
-        <CardFooter className="flex flex-col p-0 border-t bg-gray-50 flex-shrink-0 z-20"><div className="w-full p-4 flex justify-between items-center border-b border-dashed border-gray-300"><span className="text-sm font-medium text-muted-foreground uppercase">Total a Pagar</span><span className="text-3xl font-extrabold text-gray-900 tracking-tight">R$ {totalCompra.toFixed(2)}</span></div><div className="p-4 w-full bg-white"><Button className="w-full h-14 text-xl font-bold shadow-lg bg-green-600 hover:bg-green-700" onClick={openPaymentModal} disabled={cart.length === 0 || isSubmitting || caixaStatus !== 'aberto'}>{caixaStatus !== 'aberto' ? <span className="flex items-center gap-2"><Lock className="h-5 w-5" /> CAIXA FECHADO</span> : <span className="flex items-center gap-2"><DollarSign className="h-5 w-5" /> RECEBER</span>}</Button></div></CardFooter>
+        <CardFooter className="flex flex-col p-0 border-t bg-gray-50 flex-shrink-0 z-20">
+            <div className="w-full p-4 flex justify-between items-center border-b border-dashed border-gray-300">
+                <span className="text-sm font-medium text-muted-foreground uppercase">Total a Pagar</span>
+                <span className="text-3xl font-extrabold text-gray-900 tracking-tight">R$ {totalCompra.toFixed(2)}</span>
+            </div>
+            <div className="p-4 w-full bg-white">
+                <Button 
+                    className="w-full h-14 text-xl font-bold shadow-lg bg-green-600 hover:bg-green-700" 
+                    onClick={openPaymentModal} 
+                    disabled={cart.length === 0 || isSubmitting || caixaStatus !== 'aberto'}
+                >
+                    {caixaStatus !== 'aberto' ? <span className="flex items-center gap-2"><Lock className="h-5 w-5" /> CAIXA FECHADO</span> : <span className="flex items-center gap-2"><DollarSign className="h-5 w-5" /> RECEBER</span>}
+                </Button>
+            </div>
+        </CardFooter>
       </Card>
 
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
@@ -208,7 +260,7 @@ export default function CaixaRapido() {
       </Dialog>
 
       <Dialog open={isCaixaModalOpen} onOpenChange={setIsCaixaModalOpen}>
-        <DialogContent className="sm:max-w-[400px]"><DialogHeader><DialogTitle>Abertura de Caixa</DialogTitle><DialogDescription>Insira o valor inicial.</DialogDescription></DialogHeader><div className="py-4"><Label>Valor Inicial (R$)</Label><div className="relative mt-2"><span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground">R$</span><Input type="number" placeholder="0,00" className="pl-10 text-xl font-bold h-14" value={valorAbertura} onChange={(e) => setValorAbertura(e.target.value)} disabled={isSubmittingCaixa} autoFocus /></div></div><DialogFooter><Button variant="outline" onClick={() => setIsCaixaModalOpen(false)}>Cancelar</Button><Button onClick={handleOpenCaixa} disabled={isSubmittingCaixa}>Confirmar</Button></DialogFooter></DialogContent>
+        <DialogContent className="sm:max-w-[400px]"><DialogHeader><DialogTitle>Abertura de Caixa</DialogTitle><DialogDescription>Insira o valor inicial para começar o turno.</DialogDescription></DialogHeader><div className="py-4"><Label>Valor Inicial (R$)</Label><div className="relative mt-2"><span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground">R$</span><Input type="number" placeholder="0,00" className="pl-10 text-xl font-bold h-14" value={valorAbertura} onChange={(e) => setValorAbertura(e.target.value)} disabled={isSubmittingCaixa} autoFocus /></div></div><DialogFooter><Button variant="outline" onClick={() => setIsCaixaModalOpen(false)}>Cancelar</Button><Button onClick={handleOpenCaixa} disabled={isSubmittingCaixa}>Confirmar</Button></DialogFooter></DialogContent>
       </Dialog>
     </div>
   );

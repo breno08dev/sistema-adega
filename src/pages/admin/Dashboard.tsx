@@ -223,8 +223,8 @@ export default function AdminDashboard() {
         
        <Card className="hover:shadow-md transition-all">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-1 p-4">
-            <CardTitle className="text-xs md:text-sm font-medium text-muted-foreground truncate">Status Caixa</CardTitle>
-            <Wallet className="h-4 w-4 text-purple-600" />
+            <CardTitle className="text-xs md:text-sm font-medium text-muted-foreground truncate " >Status Caixa</CardTitle>
+            <Wallet className= "h-4 w-4 text-purple-600"  />
           </CardHeader>
           <CardContent className="p-4 pt-0">
             {turnoInfo.status === 'Aberto' ? (
@@ -233,11 +233,17 @@ export default function AdminDashboard() {
                    <span className="relative flex h-2 w-2 md:h-3 md:w-3"><span className="animate-ping absolute h-full w-full rounded-full bg-green-400 opacity-75"></span><span className="relative rounded-full h-2 w-2 md:h-3 md:w-3 bg-green-500"></span></span>
                    Aberto
                 </div>
+                <p className="text-[10px] md:text-xs text-muted-foreground mt-4">Caixa em atendimento</p>
               </div>
             ) : (
-              <div className="text-xl md:text-2xl font-bold text-muted-foreground flex items-center gap-2">
-                <span className="h-2 w-2 md:h-3 md:w-3 rounded-full bg-red-500"></span> Fechado
-              </div>
+             <div className="flex flex-col">
+        <div className="text-xl md:text-2xl font-bold text-muted-foreground flex items-center gap-2">
+          <span className="h-2 w-2 md:h-3 md:w-3 rounded-full bg-red-500"></span> 
+          Fechado
+        </div>
+        {/* SUBTEXTO ADICIONADO AQUI */}
+        <p className="text-[10px] md:text-xs text-muted-foreground mt-4">Caixa fechado</p>
+      </div>
             )}
           </CardContent>
         </Card>

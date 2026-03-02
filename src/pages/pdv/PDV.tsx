@@ -5,11 +5,21 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Plus, ShoppingCart, User, List, Minus, Search, Trash2, ChevronRight } from "lucide-react"; 
+import { Plus, ShoppingCart, User, List, Minus, Search, Trash2, ChevronRight, Lock } from "lucide-react"; 
 
 type PaymentMethod = "dinheiro" | "pix" | "cartao_credito" | "cartao_debito";
 
@@ -24,20 +34,33 @@ export default function PDV() {
   const [searchTerm, setSearchTerm] = useState("");
   const [openComandas, setOpenComandas] = useState<OpenSale[]>([]);
   const [selectedComanda, setSelectedComanda] = useState<SelectedSale | null>(null);
+  
+  // Controle de Caixa
+  const [caixaId, setCaixaId] = useState<string | null>(null);
 
   const [isComandaModalOpen, setIsComandaModalOpen] = useState(false);
+  const [isCancelAlertOpen, setIsCancelAlertOpen] = useState(false);
   const [newComandaNumber, setNewComandaNumber] = useState("");
   const [newComandaName, setNewComandaName] = useState("");
 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // PAGAMENTO MÚLTIPLO
   const [payments, setPayments] = useState<{ method: PaymentMethod; value: number }[]>([]);
   const [currentMethod, setCurrentMethod] = useState<PaymentMethod | "">("");
   const [currentAmount, setCurrentAmount] = useState("");
 
-  useEffect(() => { loadProducts(); loadOpenComandas(); }, [user]);
+  useEffect(() => { 
+    loadProducts(); 
+    loadOpenComandas();
+    checkCaixaStatus();
+  }, [user]);
+
+  const checkCaixaStatus = async () => {
+    if (!user) return;
+    const { data } = await supabase.from("caixas").select("id").eq("colaborador_id", user.id).eq("status", "aberto").single();
+    setCaixaId(data?.id || null);
+  };
 
   const loadProducts = async () => {
     const { data } = await supabase.from('products').select('id, nome, preco_venda, quantidade').order('nome');
@@ -67,82 +90,62 @@ export default function PDV() {
 
   const handleCreateSale = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    if (!user || !caixaId) {
+      toast.error("Caixa Fechado", { description: "Abra o caixa no 'Caixa Rápido' antes de iniciar comandas." });
+      return;
+    }
     const { data, error } = await supabase.from('sales').insert([{ colaborador_id: user.id, nome_cliente: newComandaName || null, numero_comanda: newComandaNumber || null, status: 'aberta' }]).select().single();
     if (data) {
-      toast.success(`Comanda ${data.numero_comanda || ''} aberta!`);
+      toast.success(`Comanda #${data.numero_comanda || ''} aberta!`);
       setIsComandaModalOpen(false); setNewComandaName(""); setNewComandaNumber("");
       loadOpenComandas(); handleSelectComanda(data.id);
     }
   };
 
-  const totalPago = useMemo(() => payments.reduce((sum, p) => sum + p.value, 0), [payments]);
-  const faltaPagar = Math.max(0, (selectedComanda?.total || 0) - totalPago);
-  const troco = Math.max(0, totalPago - (selectedComanda?.total || 0));
-
-  const handleAddPayment = () => {
-    if (!currentMethod) return toast.error("Selecione a forma de pagamento");
-    const val = parseFloat(currentAmount.replace(",", "."));
-    if (isNaN(val) || val <= 0) return toast.error("Valor inválido");
-    setPayments([...payments, { method: currentMethod, value: val }]);
-    setCurrentMethod(""); setCurrentAmount("");
+  const handleCancelComanda = async () => {
+    if (!selectedComanda) return;
+    const { error } = await supabase.from('sales').delete().eq('id', selectedComanda.id);
+    if (!error) {
+      toast.success("Comanda cancelada com sucesso!");
+      setSelectedComanda(null);
+      loadOpenComandas();
+      setIsCancelAlertOpen(false);
+    }
   };
-
-  const handleRemovePayment = (index: number) => { setPayments(payments.filter((_, i) => i !== index)); };
 
   const handleAttemptFinishSale = () => {
     if (!selectedComanda) return;
     if (selectedComanda.sale_items.length === 0) {
-        if(confirm("Deseja cancelar esta comanda vazia?")) {
-            supabase.from('sales').delete().eq('id', selectedComanda.id).then(() => { toast.info("Cancelada"); setSelectedComanda(null); loadOpenComandas(); });
-        }
+        setIsCancelAlertOpen(true);
         return;
     }
     setPayments([]); setCurrentMethod(""); setCurrentAmount(selectedComanda.total.toFixed(2)); setIsPaymentModalOpen(true);
   };
 
   const handleConfirmPayment = async () => {
-    if (!selectedComanda || !user) return;
+    if (!selectedComanda || !user || !caixaId) return;
     setIsSubmitting(true);
     try {
-      const { data: caixaData } = await supabase.from("caixas").select("id").eq("colaborador_id", user.id).eq("status", "aberto").single();
-      if (!caixaData) throw new Error("Caixa não está aberto");
-
       const metodoPrincipal = payments.length > 0 ? payments[0].method : null;
-
       const { error } = await supabase.from('sales').update({ 
           status: 'finalizada', 
-          caixa_id: caixaData.id, 
+          caixa_id: caixaId, 
           metodo_pagamento: metodoPrincipal 
       }).eq('id', selectedComanda.id);
       
       if (error) throw error;
 
-      // --- CORREÇÃO DO TROCO AQUI ---
       let remainingToPay = selectedComanda.total;
       const paymentInserts = [];
-      
       for (const p of payments) {
           if (remainingToPay <= 0) break;
-          // Math.min garante que ele nunca salve no banco um valor maior que o que falta pagar
           const valToSave = Math.min(p.value, remainingToPay);
-          paymentInserts.push({ 
-              venda_id: selectedComanda.id, 
-              metodo_pagamento: p.method, 
-              valor: valToSave 
-          });
+          paymentInserts.push({ venda_id: selectedComanda.id, metodo_pagamento: p.method, valor: valToSave });
           remainingToPay -= valToSave;
       }
 
-      const { error: payError } = await supabase.from('sale_payments').insert(paymentInserts);
-      
-      if (payError) {
-          toast.error("Comanda fechada, mas erro na divisão: " + payError.message);
-          console.error("ERRO DIVISÃO:", payError);
-      } else {
-          toast.success("Comanda finalizada com sucesso!");
-      }
-
+      await supabase.from('sale_payments').insert(paymentInserts);
+      toast.success("Venda finalizada com sucesso!");
       setIsPaymentModalOpen(false); setSelectedComanda(null); loadOpenComandas();   
     } catch (e: any) { 
         toast.error("Erro", { description: e.message }); 
@@ -177,30 +180,46 @@ export default function PDV() {
     refreshData();
   };
 
+  const totalPago = useMemo(() => payments.reduce((sum, p) => sum + p.value, 0), [payments]);
+  const faltaPagar = Math.max(0, (selectedComanda?.total || 0) - totalPago);
+  const troco = Math.max(0, totalPago - (selectedComanda?.total || 0));
   const filteredProducts = products.filter(p => p.nome.toLowerCase().includes(searchTerm.toLowerCase()));
   const paymentLabels: Record<string, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito" };
 
+  const handleAddPayment = () => {
+    if (!currentMethod) return toast.error("Selecione a forma de pagamento");
+    const val = parseFloat(currentAmount.replace(",", "."));
+    if (isNaN(val) || val <= 0) return toast.error("Valor inválido");
+    setPayments([...payments, { method: currentMethod, value: val }]);
+    setCurrentMethod(""); setCurrentAmount("");
+  };
+
+  const handleRemovePayment = (index: number) => { setPayments(payments.filter((_, i) => i !== index)); };
+
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] gap-2 overflow-hidden bg-gray-50/50 dark:bg-gray-950">
-      <div className="flex-shrink-0 flex justify-between items-center px-1">
-        <div><h1 className="text-xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Comandas</h1></div>
+      <div className="flex-shrink-0 flex justify-between items-center px-4 py-2">
+        <h1 className="text-xl font-bold tracking-tight">Comandas</h1>
       </div>
 
-      <div className="grid gap-2 grid-cols-1 lg:grid-cols-12 flex-1 min-h-0">
+      <div className="grid gap-2 grid-cols-1 lg:grid-cols-12 flex-1 min-h-0 px-2 pb-2">
         <Card className="lg:col-span-3 flex flex-col border-none shadow-sm ring-1 ring-gray-200 dark:ring-gray-800 bg-white dark:bg-gray-900 overflow-hidden h-full">
           <CardHeader className="p-3 border-b flex-shrink-0 bg-gray-50/80">
             <div className="flex items-center justify-between">
               <CardTitle className="text-base font-bold flex items-center gap-2"><List className="h-5 w-5 text-orange-600" /> Abertas ({openComandas.length})</CardTitle>
-              <Dialog open={isComandaModalOpen} onOpenChange={setIsComandaModalOpen}>
-                <DialogTrigger asChild><Button size="sm" className="h-8 shadow-sm bg-orange-600 hover:bg-orange-700 text-white font-bold"><Plus className="h-4 w-4 mr-1" /> Nova</Button></DialogTrigger>
-                <DialogContent className="sm:max-w-[400px]">
-                  <form onSubmit={handleCreateSale}>
-                    <DialogHeader><DialogTitle>Abrir Comanda</DialogTitle></DialogHeader>
-                    <div className="grid gap-4 py-4"><div className="space-y-2"><Label>Mesa / Nº</Label><Input value={newComandaNumber} onChange={(e) => setNewComandaNumber(e.target.value)} placeholder="10" className="text-2xl font-bold h-14" autoFocus /></div><div className="space-y-2"><Label>Cliente</Label><Input value={newComandaName} onChange={(e) => setNewComandaName(e.target.value)} placeholder="Nome" className="h-12" /></div></div>
-                    <DialogFooter><Button type="submit" className="w-full h-12 text-lg">Abrir</Button></DialogFooter>
-                  </form>
-                </DialogContent>
-              </Dialog>
+              <Button 
+                size="sm" 
+                className="h-8 shadow-sm bg-orange-600 hover:bg-orange-700"
+                onClick={() => {
+                  if (!caixaId) {
+                    toast.error("Caixa Fechado", { description: "Abra o caixa no 'Caixa Rápido' primeiro." });
+                    return;
+                  }
+                  setIsComandaModalOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4 mr-1" /> Nova
+              </Button>
             </div>
           </CardHeader>
           <CardContent className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-100/50">
@@ -238,7 +257,11 @@ export default function PDV() {
               <Table><TableHeader className="bg-white sticky top-0 z-10 shadow-sm"><TableRow className="h-8 hover:bg-transparent"><TableHead className="w-[50%] pl-3 h-8 text-xs font-bold uppercase text-gray-500">Produto</TableHead><TableHead className="text-center h-8 text-xs font-bold uppercase text-gray-500">Qtd</TableHead><TableHead className="text-right pr-3 h-8 text-xs font-bold uppercase text-gray-500">Total</TableHead></TableRow></TableHeader>
                 <TableBody>
                   {selectedComanda.sale_items.map((item) => (
-                    <TableRow key={item.id} className="hover:bg-gray-50"><TableCell className="font-medium pl-3 py-1.5 align-middle"><div className="flex flex-col leading-tight"><span className="text-sm text-gray-900 font-semibold line-clamp-1">{item.nome}</span><span className="text-[10px] text-muted-foreground">Un: R$ {item.preco_unitario.toFixed(2)}</span></div></TableCell><TableCell className="text-center p-0 align-middle"><div className="flex items-center justify-center gap-0.5 bg-gray-100 rounded-lg mx-1 py-0.5"><Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white hover:shadow-sm rounded-md" onClick={() => handleDecrementItem(item)}><Minus className="h-3 w-3" /></Button><span className="text-sm font-bold w-5">{item.quantidade}</span><Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white hover:shadow-sm rounded-md" onClick={() => handleIncrementItem(item)}><Plus className="h-3 w-3" /></Button></div></TableCell><TableCell className="text-right pr-3 font-bold text-sm text-gray-900 align-middle">R$ {item.subtotal.toFixed(2)}</TableCell></TableRow>
+                    <TableRow key={item.id} className="hover:bg-gray-50">
+                      <TableCell className="font-medium pl-3 py-1.5 align-middle"><div className="flex flex-col leading-tight"><span className="text-sm text-gray-900 font-semibold line-clamp-1">{item.nome}</span><span className="text-[10px] text-muted-foreground">Un: R$ {item.preco_unitario.toFixed(2)}</span></div></TableCell>
+                      <TableCell className="text-center p-0 align-middle"><div className="flex items-center justify-center gap-0.5 bg-gray-100 rounded-lg mx-1 py-0.5"><Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white hover:shadow-sm rounded-md" onClick={() => handleDecrementItem(item)}><Minus className="h-3 w-3" /></Button><span className="text-sm font-bold w-5">{item.quantidade}</span><Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white hover:shadow-sm rounded-md" onClick={() => handleIncrementItem(item)}><Plus className="h-3 w-3" /></Button></div></TableCell>
+                      <TableCell className="text-right pr-3 font-bold text-sm text-gray-900 align-middle">R$ {item.subtotal.toFixed(2)}</TableCell>
+                    </TableRow>
                   ))}
                 </TableBody>
               </Table>
@@ -246,10 +269,34 @@ export default function PDV() {
           </CardContent>
           <CardFooter className="p-0 border-t bg-gray-50 flex-shrink-0 flex flex-col">
             <div className="flex justify-between items-center w-full px-4 py-3 border-b border-dashed border-gray-200"><span className="text-muted-foreground font-bold uppercase text-xs tracking-wider">Total</span><span className="text-4xl font-extrabold text-gray-900">R$ {selectedComanda ? Number(selectedComanda.total).toFixed(2) : "0.00"}</span></div>
-            <div className="p-3 pb-6 w-full bg-white"><Button size="lg" className="w-full h-14 font-extrabold text-xl shadow-lg bg-green-600 hover:bg-green-700" disabled={!selectedComanda} onClick={handleAttemptFinishSale}>{selectedComanda?.sale_items.length === 0 ? "Cancelar Comanda" : "RECEBER"}</Button></div>
+            <div className="p-3 pb-6 w-full bg-white">
+              <Button 
+                size="lg" 
+                className={`w-full h-14 font-extrabold text-xl shadow-lg ${selectedComanda?.sale_items.length === 0 ? 'bg-red-500 hover:bg-red-600' : 'bg-green-600 hover:bg-green-700'}`} 
+                disabled={!selectedComanda} 
+                onClick={handleAttemptFinishSale}
+              >
+                {selectedComanda?.sale_items.length === 0 ? "CANCELAR" : "RECEBER"}
+              </Button>
+            </div>
           </CardFooter>
         </Card>
       </div>
+
+      <AlertDialog open={isCancelAlertOpen} onOpenChange={setIsCancelAlertOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Deseja cancelar esta comanda?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Esta comanda está vazia. Ao confirmar, ela será removida permanentemente do sistema.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Voltar</AlertDialogCancel>
+            <AlertDialogAction onClick={handleCancelComanda} className="bg-red-500 hover:bg-red-600">Sim, Cancelar</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="sm:max-w-xl">
@@ -274,6 +321,8 @@ export default function PDV() {
           <DialogFooter className="mt-4 pt-4 border-t"><Button className="w-full h-14 text-lg font-bold bg-green-600 hover:bg-green-700" onClick={handleConfirmPayment} disabled={totalPago < (selectedComanda?.total || 0) || isSubmitting}>CONFIRMAR</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      
+      <Dialog open={isComandaModalOpen} onOpenChange={setIsComandaModalOpen}><DialogContent className="sm:max-w-[400px]"><form onSubmit={handleCreateSale}><DialogHeader><DialogTitle>Abrir Comanda</DialogTitle></DialogHeader><div className="grid gap-4 py-4"><div className="space-y-2"><Label>Mesa / Nº</Label><Input value={newComandaNumber} onChange={(e) => setNewComandaNumber(e.target.value)} placeholder="10" className="text-2xl font-bold h-14" autoFocus /></div><div className="space-y-2"><Label>Cliente</Label><Input value={newComandaName} onChange={(e) => setNewComandaName(e.target.value)} placeholder="Nome" className="h-12" /></div></div><DialogFooter><Button type="submit" className="w-full h-12 text-lg">Abrir</Button></DialogFooter></form></DialogContent></Dialog>
     </div>
   );
 }
