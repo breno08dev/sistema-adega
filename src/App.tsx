@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { DashboardLayout } from "@/components/DashboardLayout";
+import AdminCaixas from "./pages/admin/Caixas";
 
 // 1. ADICIONAR IMPORTS DE LAZY E SUSPENSE
 import { lazy, Suspense } from "react";
@@ -74,6 +75,18 @@ const App = () => (
                   </ProtectedRoute>
                 }
               />
+
+              <Route 
+              path="/admin/caixas" 
+              element={
+              <ProtectedRoute requiredType="admin">
+                <DashboardLayout>
+                  <AdminCaixas />
+                  </DashboardLayout>
+                  </ProtectedRoute>
+                  }  
+                  />
+
 
               {/* Rotas Colaborador */}
               <Route

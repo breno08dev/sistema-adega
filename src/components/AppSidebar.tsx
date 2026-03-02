@@ -5,6 +5,7 @@ import {
   History,
   LogOut,
   Zap,
+  Wallet,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import {
@@ -24,10 +25,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { useQueryClient } from "@tanstack/react-query";
 
+
 const adminItems = [
   { title: "Dashboard", url: "/admin", icon: LayoutDashboard },
   { title: "Produtos", url: "/admin/produtos", icon: Package },
   { title: "Vendas", url: "/admin/vendas", icon: History },
+  {title: "Fechamentos",url: "/admin/caixas",icon: Wallet},
 ];
 
 const colaboradorItems = [
