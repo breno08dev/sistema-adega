@@ -55,13 +55,35 @@ export default function CaixaRapido() {
   }, []); 
 
   const checkCaixaStatus = async () => {
-    if (!user) { setCaixaStatus("fechado"); return; }
+    if (!user) { 
+        setCaixaStatus("fechado"); 
+        return; 
+    }
     setCaixaStatus("loading");
     try {
-      const { data } = await supabase.from("caixas").select("id").eq("colaborador_id", user.id).eq("status", "aberto").single();
-      if (data) { setCaixaId(data.id); setCaixaStatus("aberto"); } else { setCaixaStatus("fechado"); setCaixaId(null); }
-    } catch { setCaixaStatus("fechado"); setCaixaId(null); }
+      const { data, error } = await supabase
+        .from("caixas")
+        .select("id")
+        .eq("colaborador_id", user.id)
+        .eq("status", "aberto")
+        .order("data_abertura", { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) { 
+        setCaixaId(data[0].id); 
+        setCaixaStatus("aberto"); 
+      } else { 
+        setCaixaStatus("fechado"); 
+        setCaixaId(null); 
+      }
+    } catch { 
+      setCaixaStatus("fechado"); 
+      setCaixaId(null); 
+    }
   };
+
   useEffect(() => { checkCaixaStatus(); }, [user]);
 
   const filteredProducts = useMemo(() => {
@@ -73,7 +95,6 @@ export default function CaixaRapido() {
   }, [products, searchTerm, selectedCategory]);
 
   const addToCart = (product: Product) => {
-    // TRAVA DE SEGURANÇA ATUALIZADA
     if (caixaStatus !== 'aberto') {
         toast.error("Caixa Fechado", {
             description: "É necessário abrir o caixa para iniciar as vendas."
@@ -220,7 +241,7 @@ export default function CaixaRapido() {
                         Aberto
                     </div>
                 ) : (
-                    <Button size="sm" variant="destructive" className="h-8 text-xs font-bold gap-2 animate-pulse" onClick={() => setIsCaixaModalOpen(true)} disabled={caixaStatus === 'loading'}>
+                    <Button size="sm" variant="destructive" className="h-8 text-xs font-bold gap-2 animate-pulse" onClick={() => setIsCaixaModalOpen(true)}>
                         <Lock className="h-3 w-3" /> ABRIR CAIXA
                     </Button>
                 )}

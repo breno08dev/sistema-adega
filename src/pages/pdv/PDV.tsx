@@ -58,8 +58,23 @@ export default function PDV() {
 
   const checkCaixaStatus = async () => {
     if (!user) return;
-    const { data } = await supabase.from("caixas").select("id").eq("colaborador_id", user.id).eq("status", "aberto").single();
-    setCaixaId(data?.id || null);
+    try {
+      const { data, error } = await supabase
+        .from("caixas")
+        .select("id")
+        .eq("colaborador_id", user.id)
+        .eq("status", "aberto")
+        .order("data_abertura", { ascending: false })
+        .limit(1);
+        
+      if (data && data.length > 0) {
+        setCaixaId(data[0].id);
+      } else {
+        setCaixaId(null);
+      }
+    } catch (error) {
+      setCaixaId(null);
+    }
   };
 
   const loadProducts = async () => {
