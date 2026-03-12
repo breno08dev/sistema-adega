@@ -9,7 +9,7 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import AdminCaixas from "./pages/admin/Caixas";
 
 // 1. ADICIONAR IMPORTS DE LAZY E SUSPENSE
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 
 const queryClient = new QueryClient();
 
@@ -32,9 +32,15 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 // --- IMPORTAÇÃO DA NOVA PÁGINA ---
 const CaixaRapido = lazy(() => import("./pages/pdv/Caixa-Rapido"));
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <TooltipProvider>
+const App = () => {
+  // Esse código força o HTML a carregar com a classe "dark"
+  useEffect(() => {
+    document.documentElement.classList.add('dark');
+  }, []);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
       <Toaster />
       <Sonner />
       <BrowserRouter>
@@ -133,6 +139,7 @@ const App = () => (
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
-);
+  );
+}
 
 export default App;

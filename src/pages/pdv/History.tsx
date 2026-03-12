@@ -1,4 +1,3 @@
-// src/pages/pdv/History.tsx
 import { useEffect, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -48,13 +47,15 @@ import {
     TrendingUp,
     ArrowUpCircle,
     Receipt,
-    MinusCircle
+    MinusCircle,
+    FileText,
+    AlertTriangle
 } from "lucide-react"; 
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-// --- TIPOS ATUALIZADOS ---
+// --- TIPOS ---
 type PaymentMethod = Database["public"]["Enums"]["payment_method"];
 type SalePayment = { metodo_pagamento: PaymentMethod; valor: number };
 
@@ -179,15 +180,12 @@ export default function CollaboratorHistory() {
 
     let tAbertura = 0; let tSaidas = 0;
     movements.forEach(mov => {
-      // Diferenciamos o que é entrada de abertura/reforço e o que é saída de sangria
       if (mov.tipo === 'entrada') tAbertura += Number(mov.valor);
       else if (mov.descricao !== 'Fechamento de Caixa') {
-        // Ignoramos a saída automática do fechamento para não zerar o saldo antes da hora na tela
         tSaidas += Number(mov.valor);
       }
     });
 
-    // LOGICA CORRIGIDA: Abertura + Vendas em Dinheiro - Sangrias
     const saldoFinal = tAbertura + tDinheiro - tSaidas;
 
     return { 
@@ -204,7 +202,7 @@ export default function CollaboratorHistory() {
   // FUNÇÕES HELPER PARA PAGAMENTO
   const getPaymentText = (sale: Sale): string => {
     if (sale.sale_payments && sale.sale_payments.length > 0) {
-        return "Dividi (" + sale.sale_payments.map(p => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
+        return "(" + sale.sale_payments.map(p => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
     } else if (sale.metodo_pagamento) {
         return paymentMethodLabels[sale.metodo_pagamento];
     }
@@ -216,14 +214,14 @@ export default function CollaboratorHistory() {
         return (
            <div className="flex flex-col gap-1 items-start">
              {sale.sale_payments.map((p, idx) => (
-               <Badge key={idx} variant="outline" className="bg-gray-50 text-gray-700 shadow-sm border-gray-200">
+               <Badge key={idx} variant="outline" className="bg-muted text-foreground border-border font-medium shadow-none">
                  {paymentMethodLabels[p.metodo_pagamento]}: R$ {Number(p.valor).toFixed(2)}
                </Badge>
              ))}
            </div>
         );
     } else if (sale.metodo_pagamento) {
-        return <Badge variant="outline">{paymentMethodLabels[sale.metodo_pagamento]}</Badge>;
+        return <Badge variant="outline" className="border-border text-foreground">{paymentMethodLabels[sale.metodo_pagamento]}</Badge>;
     }
     return <Badge variant="destructive">N/A</Badge>;
   };
@@ -249,7 +247,7 @@ export default function CollaboratorHistory() {
                 data: mov.created_at,
                 descricao: mov.descricao, 
                 pagamentoTexto: "Sangria (Saída)",
-                pagamentoBadge: <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 font-semibold">Sangria</Badge>,
+                pagamentoBadge: <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 font-semibold shadow-none">Sangria</Badge>,
                 valor: Number(mov.valor) || 0,
             });
         }
@@ -257,38 +255,92 @@ export default function CollaboratorHistory() {
     return itens.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
   }, [sales, movements]);
 
+  // --- GERADOR DE PDF PROFISSIONAL ---
   const generatePDF = () => {
     if (!caixaAberto) return; 
+    
     const doc = new jsPDF();
-    const today = format(new Date(), "dd/MM/yyyy HH:mm", { locale: ptBR });
-    doc.text("Relatório de Caixa", 14, 16);
+    const dataAbertura = format(new Date(caixaAberto.data_abertura), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
+    const dataAtual = format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
+    
+    // Título Principal
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text("Relatório de Fechamento de Turno", 14, 20);
+    
+    // Metadados do Caixa
+    doc.setFont("helvetica", "normal");
     doc.setFontSize(10);
-    doc.text(`Gerado em: ${today}`, 14, 22);
     doc.text(`Colaborador: ${userName || user?.email}`, 14, 28);
+    doc.text(`Abertura do Caixa: ${dataAbertura}`, 14, 34);
+    doc.text(`Horário do Relatório: ${dataAtual}`, 14, 40);
+    
+    doc.line(14, 45, 196, 45); // Linha divisória
+
+    // Resumo Financeiro
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text("Resumo Financeiro:", 14, 55);
+    
+    doc.setFont("helvetica", "normal");
+    autoTable(doc, {
+        startY: 60,
+        theme: 'grid',
+        headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
+        bodyStyles: { textColor: 50 },
+        columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } },
+        body: [
+            ['Total de Vendas no Turno', `R$ ${totalVendas.toFixed(2)}`],
+            ['Dinheiro (Vendas)', `R$ ${totalDinheiroVendas.toFixed(2)}`],
+            ['Pix', `R$ ${totalPix.toFixed(2)}`],
+            ['Cartão', `R$ ${totalCartao.toFixed(2)}`],
+            ['Abertura / Entradas (Fundo de Caixa)', `R$ ${totalEntradasAbertura.toFixed(2)}`],
+            ['Saídas / Sangrias', `R$ ${totalSaidasSangria.toFixed(2)}`],
+        ],
+    });
+
+    // Bloco de Saldo Final com Destaque
+    const finalY = (doc as any).lastAutoTable.finalY + 10;
+    doc.setFillColor(240, 240, 240); // Fundo cinza claro
+    doc.rect(14, finalY, 182, 12, 'F');
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.setTextColor(0, 0, 0);
+    doc.text("SALDO FINAL ESPERADO NA GAVETA:", 18, finalY + 8);
+    doc.text(`R$ ${saldoFisico.toFixed(2)}`, 140, finalY + 8);
+
+    doc.line(14, finalY + 20, 196, finalY + 20); // Linha divisória
+
+    // Histórico Detalhado
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.text("Histórico Detalhado de Movimentações:", 14, finalY + 30);
+    
     const historyBody = historicoUnificado.map(item => [
       format(new Date(item.data), "HH:mm"),
       item.descricao,
       item.pagamentoTexto, 
       `${item.tipo === 'sangria' ? '- ' : ''}R$ ${item.valor.toFixed(2)}`
     ]);
+    
     autoTable(doc, {
-      startY: 35,
+      startY: finalY + 35,
+      theme: 'striped',
+      headStyles: { fillColor: [100, 116, 139], textColor: 255 },
       head: [['Hora', 'Cliente / Descrição', 'Pagamento/Tipo', 'Valor']], 
       body: historyBody,
     });
-    const lastY = (doc as any).lastAutoTable.finalY + 10;
-    doc.text("Resumo Financeiro:", 14, lastY);
-    autoTable(doc, {
-        startY: lastY + 5,
-        body: [
-            ['Dinheiro (Vendas)', `R$ ${totalDinheiroVendas.toFixed(2)}`],
-            ['Pix', `R$ ${totalPix.toFixed(2)}`],
-            ['Cartão', `R$ ${totalCartao.toFixed(2)}`],
-            ['Abertura/Entradas', `R$ ${totalEntradasAbertura.toFixed(2)}`],
-            ['Saídas/Sangrias', `R$ ${totalSaidasSangria.toFixed(2)}`],
-            ['SALDO FINAL (GAVETA)', `R$ ${saldoFisico.toFixed(2)}`],
-        ]
-    });
+    
+    // Espaço para Assinatura
+    const pageHeight = doc.internal.pageSize.height;
+    if ((doc as any).lastAutoTable.finalY > pageHeight - 40) doc.addPage();
+    
+    const sigY = doc.internal.pageSize.height - 20;
+    doc.line(60, sigY - 5, 150, sigY - 5);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text("Assinatura do Colaborador", 105, sigY, { align: "center" });
+
     doc.save(`Relatorio_Caixa_${format(new Date(), "dd-MM")}.pdf`);
   };
 
@@ -321,7 +373,7 @@ export default function CollaboratorHistory() {
   
   const handleConfirmCloseCaixa = async () => {
     if (!user || !caixaAberto) return; 
-    const valorFechamento = saldoFisico; // O valor que sai no fechamento é o saldo físico atual
+    const valorFechamento = saldoFisico; 
     await supabase.from('movements').insert({
       responsavel_id: user.id,
       tipo: 'saida',
@@ -341,14 +393,14 @@ export default function CollaboratorHistory() {
     }
   };
 
-  if (loading) return <div className="p-8 text-center text-muted-foreground animate-pulse">Carregando informações...</div>;
+  if (loading) return <div className="p-8 text-center text-muted-foreground animate-pulse">A procurar informações...</div>;
 
   if (!caixaAberto) {
     return (
       <div className="flex flex-col items-center justify-center h-[calc(100vh-100px)] text-center space-y-4 animate-in fade-in">
-        <div className="bg-gray-100 dark:bg-gray-800 p-6 rounded-full"><Lock className="h-10 w-10 text-muted-foreground" /></div>
-        <h1 className="text-2xl font-bold tracking-tight">Caixa Fechado</h1>
-        <p className="text-muted-foreground max-w-md">Seu turno não foi iniciado. Vá para a tela de <strong>Caixa Rápido</strong> para abrir o caixa.</p>
+        <div className="bg-card p-6 rounded-full border border-border shadow-sm"><Lock className="h-10 w-10 text-muted-foreground" /></div>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Caixa Fechado</h1>
+        <p className="text-muted-foreground max-w-md">O seu turno não foi iniciado. Vá para a tela de <strong>Caixa Rápido</strong> para abrir o caixa.</p>
       </div>
     );
   }
@@ -357,65 +409,80 @@ export default function CollaboratorHistory() {
     <div className="space-y-6 animate-in fade-in duration-500 pb-10">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Receipt className="h-6 w-6 text-primary" /> Meu Caixa</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2 text-foreground"><Receipt className="h-6 w-6 text-primary" /> Meu Caixa</h1>
           <p className="text-muted-foreground text-sm flex items-center gap-2 mt-1"><span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>Aberto em: {format(new Date(caixaAberto.data_abertura), "dd/MM 'às' HH:mm")}</p>
         </div>
         <div className="flex items-center gap-2">
-            <Button variant="outline" className="text-red-600 border-red-200 bg-red-50 hover:bg-red-100 shadow-sm" onClick={() => setIsSangriaModalOpen(true)}>
+            <Button variant="outline" className="text-destructive border-destructive/20 bg-destructive/10 hover:bg-destructive/20 shadow-sm" onClick={() => setIsSangriaModalOpen(true)}>
                 <MinusCircle className="h-4 w-4 mr-2" /> Sangria
             </Button>
             <AlertDialog open={isCloseCaixaAlertOpen} onOpenChange={setIsCloseCaixaAlertOpen}>
             <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="gap-2 text-gray-700 border-gray-300 hover:bg-gray-50 shadow-sm">
+                <Button variant="outline" className="gap-2 text-foreground border-border bg-background hover:bg-muted shadow-sm">
                     Opções <ChevronDown className="h-4 w-4" />
                 </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem onClick={generatePDF} className="cursor-pointer"><Download className="h-4 w-4 mr-2" /> Relatório PDF</DropdownMenuItem>
-                <AlertDialogTrigger asChild><DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50 cursor-pointer"><Lock className="h-4 w-4 mr-2" /> Fechar Caixa</DropdownMenuItem></AlertDialogTrigger>
+                <DropdownMenuContent align="end" className="w-48 bg-card border-border">
+                <DropdownMenuItem onClick={generatePDF} className="cursor-pointer text-foreground hover:bg-muted"><FileText className="h-4 w-4 mr-2 text-primary" /> Relatório PDF</DropdownMenuItem>
+                <AlertDialogTrigger asChild><DropdownMenuItem className="text-destructive focus:text-destructive focus:bg-destructive/10 cursor-pointer"><Lock className="h-4 w-4 mr-2" /> Fechar Caixa</DropdownMenuItem></AlertDialogTrigger>
                 </DropdownMenuContent>
             </DropdownMenu>
-            <AlertDialogContent>
-                <AlertDialogHeader><AlertDialogTitle>Fechar Caixa?</AlertDialogTitle>
-                <AlertDialogDescription>
-                    Isso encerrará seu turno e registrará a saída do valor total.
-                    <div className="mt-4 p-3 bg-muted rounded-md text-sm font-medium text-center">Valor Final Estimado: R$ {saldoFisico.toFixed(2)}</div>
-                </AlertDialogDescription>
+            
+            {/* NOVO MODAL DE TRAVA DE RELATÓRIO */}
+            <AlertDialogContent className="bg-card border-border">
+                <AlertDialogHeader>
+                    <AlertDialogTitle className="text-foreground text-xl flex items-center gap-2">
+                        <AlertTriangle className="h-6 w-6 text-yellow-500" />
+                        Atenção: Já tirou o relatório?
+                    </AlertDialogTitle>
+                    <AlertDialogDescription className="text-muted-foreground text-base mt-2">
+                        Antes de fechar o caixa, é imprescindível que tenha gerado o <strong>Relatório PDF</strong> deste turno para conferência.
+                        <div className="mt-4 p-3 bg-muted rounded-md text-sm font-medium text-center text-foreground border border-border">
+                            Valor Final Estimado: R$ {saldoFisico.toFixed(2)}
+                        </div>
+                    </AlertDialogDescription>
                 </AlertDialogHeader>
-                <AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={handleConfirmCloseCaixa} className="bg-red-600 hover:bg-red-700">Confirmar Fechamento</AlertDialogAction></AlertDialogFooter>
+                <AlertDialogFooter className="gap-2 sm:gap-0 mt-4">
+                    <AlertDialogCancel className="bg-background text-foreground border-border hover:bg-muted font-bold">
+                        Não, voltar
+                    </AlertDialogCancel>
+                    <AlertDialogAction onClick={handleConfirmCloseCaixa} className="bg-destructive text-destructive-foreground hover:bg-destructive/90 font-bold">
+                        Sim, fechar caixa
+                    </AlertDialogAction>
+                </AlertDialogFooter>
             </AlertDialogContent>
             </AlertDialog>
         </div>
       </div>
 
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-l-4 border-l-emerald-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Gaveta (Dinheiro)</CardTitle><div className="h-8 w-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center"><Wallet className="h-4 w-4 text-emerald-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {saldoFisico.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Físico disponível (Abertura + Vendas Dinheiro - Sangrias)</p></CardContent></Card>
-        <Card className="border-l-4 border-l-green-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Dinheiro</CardTitle><div className="h-8 w-8 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center"><DollarSign className="h-4 w-4 text-green-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {totalDinheiroVendas.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Entrada em espécie deste turno</p></CardContent></Card>
-        <Card className="border-l-4 border-l-cyan-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Pix</CardTitle><div className="h-8 w-8 rounded-full bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center"><Smartphone className="h-4 w-4 text-cyan-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {totalPix.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Transf. Digital</p></CardContent></Card>
-        <Card className="border-l-4 border-l-purple-500 shadow-sm hover:shadow-md transition-all bg-white dark:bg-gray-900"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Cartão</CardTitle><div className="h-8 w-8 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center"><CreditCard className="h-4 w-4 text-purple-600" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-gray-900 dark:text-gray-100">R$ {totalCartao.toFixed(2)}</div><p className="text-xs text-muted-foreground mt-1">Crédito / Débito</p></CardContent></Card>
+        <Card className="border-l-4 border-l-emerald-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Gaveta (Dinheiro)</CardTitle><div className="h-8 w-8 rounded-full bg-emerald-500/10 flex items-center justify-center"><Wallet className="h-4 w-4 text-emerald-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {saldoFisico.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Físico disponível</p></CardContent></Card>
+        <Card className="border-l-4 border-l-primary shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Dinheiro</CardTitle><div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center"><DollarSign className="h-4 w-4 text-primary" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalDinheiroVendas.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Entrada em espécie</p></CardContent></Card>
+        <Card className="border-l-4 border-l-cyan-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Pix</CardTitle><div className="h-8 w-8 rounded-full bg-cyan-500/10 flex items-center justify-center"><Smartphone className="h-4 w-4 text-cyan-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalPix.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Transf. Digital</p></CardContent></Card>
+        <Card className="border-l-4 border-l-purple-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Cartão</CardTitle><div className="h-8 w-8 rounded-full bg-purple-500/10 flex items-center justify-center"><CreditCard className="h-4 w-4 text-purple-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalCartao.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Crédito / Débito</p></CardContent></Card>
       </div>
       
-      <div className="flex flex-wrap gap-4 text-sm px-1 py-2 bg-gray-50/50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-800">
-         <div className="flex items-center gap-2"><div className="p-1 bg-blue-100 rounded text-blue-600"><TrendingUp className="h-3 w-3" /></div><span className="text-muted-foreground">Total Vendido: <strong className="text-foreground">R$ {totalVendas.toFixed(2)}</strong></span></div>
-         <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 self-center hidden sm:block"></div>
-         <div className="flex items-center gap-2"><div className="p-1 bg-green-100 rounded text-green-600"><ArrowUpCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Abertura: <strong className="text-foreground">R$ {totalEntradasAbertura.toFixed(2)}</strong></span></div>
-         <div className="w-px h-4 bg-gray-300 dark:bg-gray-700 self-center hidden sm:block"></div>
-         <div className="flex items-center gap-2"><div className="p-1 bg-red-100 rounded text-red-600"><MinusCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Saídas: <strong className="text-foreground">R$ {totalSaidasSangria.toFixed(2)}</strong></span></div>
+      <div className="flex flex-wrap gap-4 text-sm px-4 py-3 bg-muted/30 rounded-lg border border-dashed border-border">
+         <div className="flex items-center gap-2"><div className="p-1 bg-primary/10 rounded text-primary"><TrendingUp className="h-3 w-3" /></div><span className="text-muted-foreground">Total Vendido: <strong className="text-foreground">R$ {totalVendas.toFixed(2)}</strong></span></div>
+         <div className="w-px h-4 bg-border self-center hidden sm:block"></div>
+         <div className="flex items-center gap-2"><div className="p-1 bg-emerald-500/10 rounded text-emerald-500"><ArrowUpCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Abertura: <strong className="text-foreground">R$ {totalEntradasAbertura.toFixed(2)}</strong></span></div>
+         <div className="w-px h-4 bg-border self-center hidden sm:block"></div>
+         <div className="flex items-center gap-2"><div className="p-1 bg-destructive/10 rounded text-destructive"><MinusCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Saídas: <strong className="text-foreground">R$ {totalSaidasSangria.toFixed(2)}</strong></span></div>
       </div>
 
-      <Card className="border shadow-sm ring-1 ring-gray-200 dark:ring-gray-800 overflow-hidden">
-        <CardHeader className="bg-gray-50/50 dark:bg-gray-900/50 border-b py-3 px-6"><CardTitle className="text-base font-semibold">Histórico de Movimentações</CardTitle></CardHeader>
+      <Card className="bg-card border-border shadow-sm overflow-hidden">
+        <CardHeader className="bg-muted/30 border-b border-border py-3 px-6"><CardTitle className="text-base font-semibold text-foreground">Histórico de Movimentações</CardTitle></CardHeader>
         <CardContent className="p-0">
           <Table>
-            <TableHeader><TableRow className="hover:bg-transparent"><TableHead className="pl-6 w-[100px]">Horário</TableHead><TableHead>Cliente / Descrição</TableHead><TableHead>Pagamento / Tipo</TableHead><TableHead className="text-right pr-6">Valor Total</TableHead><TableHead className="w-[100px]"></TableHead></TableRow></TableHeader>
+            <TableHeader className="bg-muted/50 border-border"><TableRow className="border-border hover:bg-transparent"><TableHead className="pl-6 w-[100px] text-muted-foreground">Horário</TableHead><TableHead className="text-muted-foreground">Cliente / Descrição</TableHead><TableHead className="text-muted-foreground">Pagamento / Tipo</TableHead><TableHead className="text-right pr-6 text-muted-foreground">Valor Total</TableHead><TableHead className="w-[100px] text-muted-foreground"></TableHead></TableRow></TableHeader>
             <TableBody>
               {historicoUnificado.map((item) => (
-                <TableRow key={item.id} className="hover:bg-gray-50/60 dark:hover:bg-gray-800/50 transition-colors align-top">
+                <TableRow key={item.id} className="hover:bg-muted/30 border-border transition-colors align-top">
                   <TableCell className="pl-6 font-medium text-muted-foreground tabular-nums pt-4">{format(new Date(item.data), "HH:mm")}</TableCell>
-                  <TableCell className="pt-4"><span className={`font-medium ${item.tipo === 'sangria' ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>{item.descricao}</span></TableCell>
+                  <TableCell className="pt-4"><span className={`font-medium ${item.tipo === 'sangria' ? 'text-destructive' : 'text-foreground'}`}>{item.descricao}</span></TableCell>
                   <TableCell className="pt-3 pb-3">{item.pagamentoBadge}</TableCell>
-                  <TableCell className={`text-right pr-6 font-bold tabular-nums pt-4 ${item.tipo === 'sangria' ? 'text-red-600' : 'text-gray-900 dark:text-gray-100'}`}>{item.tipo === 'sangria' ? '- ' : ''}R$ {item.valor.toFixed(2)}</TableCell>
+                  <TableCell className={`text-right pr-6 font-bold tabular-nums pt-4 ${item.tipo === 'sangria' ? 'text-destructive' : 'text-foreground'}`}>{item.tipo === 'sangria' ? '- ' : ''}R$ {item.valor.toFixed(2)}</TableCell>
                   <TableCell className="pt-3">{item.tipo === 'venda' && <SaleDetailsDialog saleId={item.id} />}</TableCell>
                 </TableRow>
               ))}
@@ -425,20 +492,23 @@ export default function CollaboratorHistory() {
       </Card>
 
       <Dialog open={isSangriaModalOpen} onOpenChange={setIsSangriaModalOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader><DialogTitle className="flex items-center gap-2 text-red-600"><MinusCircle className="h-5 w-5" /> Nova Sangria (Retirada)</DialogTitle></DialogHeader>
+        <DialogContent className="sm:max-w-[425px] bg-card border-border">
+          <DialogHeader><DialogTitle className="flex items-center gap-2 text-destructive"><MinusCircle className="h-5 w-5" /> Nova Sangria (Retirada)</DialogTitle></DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="space-y-2">
-              <Label>Valor da Retirada (R$)</Label>
+              <Label className="text-foreground">Valor da Retirada (R$)</Label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-muted-foreground">R$</span>
-                <Input type="number" value={sangriaValor} onChange={(e) => setSangriaValor(e.target.value)} placeholder="0.00" className="pl-9 h-12 font-bold text-lg" autoFocus />
+                <Input type="number" value={sangriaValor} onChange={(e) => setSangriaValor(e.target.value)} placeholder="0.00" className="pl-9 h-12 font-bold text-lg bg-background border-border text-foreground" autoFocus />
               </div>
               <p className="text-xs text-muted-foreground">Saldo disponível na gaveta: <strong>R$ {saldoFisico.toFixed(2)}</strong></p>
             </div>
-            <div className="space-y-2"><Label>Descrição / Motivo</Label><Input value={sangriaDescricao} onChange={(e) => setSangriaDescricao(e.target.value)} placeholder="Ex: Pagamento fornecedor, Retirada cofre..." className="h-10" /></div>
+            <div className="space-y-2"><Label className="text-foreground">Descrição / Motivo</Label><Input value={sangriaDescricao} onChange={(e) => setSangriaDescricao(e.target.value)} placeholder="Ex: Pagamento fornecedor, Retirada cofre..." className="h-10 bg-background border-border text-foreground" /></div>
           </div>
-          <DialogFooter><Button variant="outline" onClick={() => setIsSangriaModalOpen(false)}>Cancelar</Button><Button className="bg-red-600 hover:bg-red-700" onClick={handleSangria} disabled={isSubmittingSangria}>{isSubmittingSangria ? "Registrando..." : "Confirmar Sangria"}</Button></DialogFooter>
+          <DialogFooter>
+             <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted" onClick={() => setIsSangriaModalOpen(false)}>Cancelar</Button>
+             <Button className="bg-destructive hover:bg-destructive/90 text-destructive-foreground" onClick={handleSangria} disabled={isSubmittingSangria}>{isSubmittingSangria ? "Registando..." : "Confirmar Sangria"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
@@ -461,14 +531,14 @@ function SaleDetailsDialog({ saleId }: { saleId: string }) {
   }, [isOpen, saleId]);
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild><Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-primary">Detalhes</Button></DialogTrigger>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader><DialogTitle>Itens da Venda</DialogTitle></DialogHeader>
+      <DialogTrigger asChild><Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-primary hover:bg-primary/10">Detalhes</Button></DialogTrigger>
+      <DialogContent className="sm:max-w-[425px] bg-card border-border">
+        <DialogHeader><DialogTitle className="text-foreground">Itens da Venda</DialogTitle></DialogHeader>
         {loading ? (<div className="py-8 flex justify-center"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary"></div></div>) : (
-            <div className="border rounded-md overflow-hidden">
+            <div className="border border-border rounded-md overflow-hidden">
                 <Table>
-                    <TableHeader><TableRow className="bg-muted/50"><TableHead className="h-9">Produto</TableHead><TableHead className="h-9 text-center">Qtd.</TableHead><TableHead className="h-9 text-right">Total</TableHead></TableRow></TableHeader>
-                    <TableBody>{items.map(item => (<TableRow key={item.id} className="hover:bg-transparent"><TableCell className="py-2 text-sm">{item.products?.nome}</TableCell><TableCell className="py-2 text-sm text-center">{item.quantidade}</TableCell><TableCell className="py-2 text-sm text-right font-medium">R$ {Number(item.subtotal).toFixed(2)}</TableCell></TableRow>))}</TableBody>
+                    <TableHeader><TableRow className="bg-muted/50 border-border hover:bg-transparent"><TableHead className="h-9 text-muted-foreground">Produto</TableHead><TableHead className="h-9 text-center text-muted-foreground">Qtd.</TableHead><TableHead className="h-9 text-right text-muted-foreground">Total</TableHead></TableRow></TableHeader>
+                    <TableBody>{items.map(item => (<TableRow key={item.id} className="hover:bg-muted/30 border-border"><TableCell className="py-2 text-sm text-foreground">{item.products?.nome}</TableCell><TableCell className="py-2 text-sm text-center text-foreground">{item.quantidade}</TableCell><TableCell className="py-2 text-sm text-right font-medium text-foreground">R$ {Number(item.subtotal).toFixed(2)}</TableCell></TableRow>))}</TableBody>
                 </Table>
             </div>
         )}

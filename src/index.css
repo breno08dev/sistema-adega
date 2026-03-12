@@ -3,97 +3,50 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    /* FUNDO: 
-      - Usaremos um cinza bem claro (tipo zinc-100)
-      - Isso faz o card (que será branco) se destacar.
-    */
-    --background: 240 5% 96%; /* Cinza muito claro */
-    --foreground: 224 71.4% 4.1%; /* Texto principal (preto/azul escuro) */
+  /* Juntamos :root e .dark para FORÇAR o tema Preto e Azul em todo o sistema */
+  :root, .dark {
+    /* Fundo Preto/Cinza Profundo */
+    --background: 240 10% 4%; 
+    --foreground: 0 0% 98%; /* Letras Brancas */
 
-    /* CARDS E POP-UPS:
-      - Mantemos 0 0% 100% (Branco) para contrastar com o fundo.
-    */
-    --card: 0 0% 100%;
-    --card-foreground: 224 71.4% 4.1%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 224 71.4% 4.1%;
+    /* Cards e Tabelas (Sutilmente mais claros para não sumirem no fundo preto) */
+    --card: 240 10% 8%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 8%;
+    --popover-foreground: 0 0% 98%;
 
-    /* COR PRIMÁRIA (Botões, ícones principais):
-      - Antes era Roxo
-      - Agora é o Azul-Marinho/Índigo da sua logo (tipo indigo-600)
-    */
+    /* Detalhes em AZUL (Botões, ícones principais, destaques) */
     --primary: 221 83% 53%;
-    --primary-foreground: 0 0% 100%; /* Texto do botão (branco) */
-    
-    /* COR DE ACENTO (Usada em gradientes, sidebar):
-      - Antes era Roxo claro
-      - Agora é o Dourado/Amarelo da sua logo (tipo amber-500)
-    */
-    --primary-accent: 45 90% 55%;
+    --primary-foreground: 0 0% 100%;
+    --primary-accent: 221 83% 45%;
 
-    /* Cores Secundárias (Neutras) */
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 224 71.4% 4.1%;
+    /* Elementos Secundários (Fundos de inputs e itens inativos) */
+    --secondary: 240 10% 15%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 10% 15%;
+    --muted-foreground: 240 5% 65%;
+    --accent: 240 10% 15%;
+    --accent-foreground: 0 0% 98%;
 
-    /* Cores "Muted" (Neutras) */
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-
-    /* Cores de Destaque (Neutras) */
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 224 71.4% 4.1%;
-
-    /* Cores de "Destruição" (Vermelho para erros) */
+    /* Alertas de Erro e Exclusão (Vermelho) */
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
 
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 221 83% 53%; /* Anel de foco (Azul) */
-
+    /* Bordas e Inputs */
+    --border: 240 10% 15%;
+    --input: 240 10% 15%;
+    --ring: 221 83% 53%; /* Contorno azul ao clicar */
     --radius: 0.75rem;
-  }
 
-  .dark {
-    /* --- TEMA DARK MODE (Azul e Dourado) --- */
-    
-    /* Fundo azul bem escuro (da logo) */
-    --background: 220 80% 10%; 
-    --foreground: 0 0% 98%;
-
-    /* Cards azul-escuro (um tom acima do fundo) */
-    --card: 220 80% 15%;
-    --card-foreground: 0 0% 98%;
-    --popover: 220 80% 15%;
-    --popover-foreground: 0 0% 98%;
-
-    /* Primária (Botões) será o Dourado para ter contraste */
-    --primary: 45 90% 55%;
-    --primary-foreground: 220 80% 10%; /* Texto do botão (Azul escuro) */
-    
-    /* Acento para gradiente escuro */
-    --primary-accent: 45 90% 65%;
-
-    /* Cores Secundárias (Neutras) */
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-
-    /* Cores "Muted" (Neutras) */
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-
-    /* Cores de Destaque (Neutras) */
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
-
-    /* Cores de "Destruição" (Vermelho para erros) */
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
-
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 45 90% 55%; /* Anel de foco (Dourado) */
+    /* Menu Lateral (Sidebar) seguindo o mesmo estilo Preto e Azul */
+    --sidebar-background: 240 10% 6%;
+    --sidebar-foreground: 0 0% 98%;
+    --sidebar-primary: 221 83% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 10% 15%;
+    --sidebar-accent-foreground: 0 0% 98%;
+    --sidebar-border: 240 10% 15%;
+    --sidebar-ring: 221 83% 53%;
   }
 }
 
