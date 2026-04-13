@@ -5,6 +5,9 @@ import {
   History,
   LogOut,
   Wallet,
+  Users,
+  BookOpen,
+  ClipboardList
 } from "lucide-react";
 import {
   Sidebar,
@@ -17,7 +20,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarFooter,
-  useSidebar, // Importado para controlar o estado do menu
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
@@ -26,29 +29,29 @@ export function AppSidebar() {
   const { signOut, userType } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const { setOpenMobile } = useSidebar(); // Hook para fechar o menu no mobile
+  const { setOpenMobile } = useSidebar();
 
-  // Itens de menu para Administração
   const adminItems = [
     { title: "Dashboard", url: "/admin", icon: LayoutDashboard },
     { title: "Produtos", url: "/admin/produtos", icon: Package },
     { title: "Vendas", url: "/admin/vendas", icon: ShoppingCart },
     { title: "Caixas", url: "/admin/caixas", icon: Wallet },
+    { title: "Balanço", url: "/admin/balanco", icon: ClipboardList }, // NOVO
   ];
 
-  // Itens de menu para Colaboradores
   const collaboratorItems = [
     { title: "Caixa Rápido", url: "/pdv/caixa-rapido", icon: ShoppingCart },
     { title: "Comandas", url: "/pdv", icon: LayoutDashboard },
     { title: "Histórico", url: "/pdv/historico", icon: History },
+    { title: "Clientes", url: "/pdv/clientes", icon: Users }, // NOVO
+    { title: "Crediário (Fiado)", url: "/pdv/crediario", icon: BookOpen }, // NOVO
   ];
 
   const items = userType === "admin" ? adminItems : collaboratorItems;
 
-  // Função para navegar e fechar o menu
   const handleNavigation = (url: string) => {
     navigate(url);
-    setOpenMobile(false); // Fecha o menu lateral após o clique
+    setOpenMobile(false);
   };
 
   return (

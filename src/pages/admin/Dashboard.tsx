@@ -9,14 +9,21 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 
 // --- TIPOS ---
-type PaymentMethod = Database["public"]["Enums"]["payment_method"];
+type PaymentMethod = "dinheiro" | "pix" | "cartao_credito" | "cartao_debito" | "fiado";
 type SaleStatus = Database["public"]["Enums"]["sale_status"];
 
 export type RecentSale = Pick<Database["public"]["Tables"]["sales"]["Row"], "id" | "created_at" | "total" | "nome_cliente" | "metodo_pagamento" | "status" | "updated_at"> & {
   profiles: { nome: string } | null;
+  sale_payments?: { metodo_pagamento: string }[]; // <--- CORREÇÃO AQUI: Adicionado para o TypeScript parar de reclamar
 };
 
-const paymentMethodLabels: Record<PaymentMethod, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito" };
+const paymentMethodLabels: Record<string, string> = { 
+    dinheiro: "Dinheiro", 
+    pix: "Pix", 
+    cartao_credito: "Crédito", 
+    cartao_debito: "Débito",
+    fiado: "Crediário"
+};
 
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
@@ -64,17 +71,24 @@ export default function AdminDashboard() {
       while (hasMore) {
         const { data, error } = await supabase
           .from("sales")
-          .select("total")
+          .select("total, metodo_pagamento")
           .eq("status", "finalizada")
           .range(offset, offset + 999);
 
         if (error || !data || data.length === 0) {
           hasMore = false;
         } else {
-          totalVendasGeral += data.reduce((acc, v) => acc + Number(v.total || 0), 0);
+          // Só soma no faturamento geral se não for fiado
+          totalVendasGeral += data.filter(s => s.metodo_pagamento !== 'fiado').reduce((acc, v) => acc + Number(v.total || 0), 0);
           if (data.length < 1000) hasMore = false;
           else offset += 1000;
         }
+      }
+
+      // Adiciona os pagamentos de crediário recebidos ao faturamento geral
+      const { data: credPgtos } = await supabase.from('crediario_pagamentos').select('valor');
+      if (credPgtos) {
+          totalVendasGeral += credPgtos.reduce((acc, p) => acc + Number(p.valor || 0), 0);
       }
 
       // 3. Buscar KPIs (Produtos e Comandas Abertas)
@@ -94,16 +108,24 @@ export default function AdminDashboard() {
           // Vendas Recentes do Turno
           const { data: turnoSales } = await supabase
             .from("sales")
-            .select("id, created_at, updated_at, total, nome_cliente, metodo_pagamento, status, profiles(nome)")
+            .select("id, created_at, updated_at, total, nome_cliente, metodo_pagamento, status, profiles(nome), sale_payments(metodo_pagamento)")
             .in("caixa_id", targetCaixaIds)
             .order("updated_at", { ascending: false });
 
           if (turnoSales) {
               turnoSalesData = turnoSales as unknown as RecentSale[];
               turnoSalesData.filter(s => s.status === 'finalizada').forEach(sale => {
-                  vendasTurnoTotal += Number(sale.total) || 0;
+                  if (sale.metodo_pagamento !== 'fiado') {
+                      vendasTurnoTotal += Number(sale.total) || 0;
+                  }
                   numVendasFinalizadas++;
               });
+          }
+
+          // Adiciona os recebimentos de crediário do turno atual ao faturamento do turno
+          const { data: turnoCredPgtos } = await supabase.from('crediario_pagamentos').select('valor').in('caixa_id', targetCaixaIds);
+          if (turnoCredPgtos) {
+              vendasTurnoTotal += turnoCredPgtos.reduce((acc, p) => acc + Number(p.valor || 0), 0);
           }
 
           // Lógica do Produto Mais Vendido do Turno
@@ -203,7 +225,17 @@ export default function AdminDashboard() {
                       <TableCell className="pt-3 md:pt-4 text-xs font-medium text-foreground">{sale.nome_cliente || "Balcão"}</TableCell>
                       <TableCell className="pt-3 md:pt-4 text-xs text-muted-foreground hidden md:table-cell">{sale.profiles?.nome || "Sistema"}</TableCell>
                       <TableCell className="pt-2 pb-2 md:pt-3 md:pb-3">
-                         {sale.status === 'aberta' ? <Badge variant="outline" className="text-orange-500 border-orange-500/30 bg-orange-500/10">Consumindo</Badge> : <Badge variant="outline" className="border-border text-foreground">{paymentMethodLabels[sale.metodo_pagamento as PaymentMethod] || 'N/A'}</Badge>}
+                         {sale.status === 'aberta' ? (
+                             <Badge variant="outline" className="text-orange-500 border-orange-500/30 bg-orange-500/10">Consumindo</Badge>
+                         ) : sale.sale_payments && sale.sale_payments.length > 1 ? (
+                             <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20">Misto</Badge>
+                         ) : sale.metodo_pagamento === 'fiado' || (sale.sale_payments && sale.sale_payments[0]?.metodo_pagamento === 'fiado') ? (
+                             <Badge variant="outline" className="text-orange-500 border-orange-500/30 bg-orange-500/10">Crediário</Badge>
+                         ) : (
+                             <Badge variant="outline" className="border-border text-foreground">
+                                 {paymentMethodLabels[sale.sale_payments?.[0]?.metodo_pagamento || sale.metodo_pagamento || "dinheiro"] || 'N/A'}
+                             </Badge>
+                         )}
                       </TableCell>
                       <TableCell className="text-right pr-4 md:pr-6 pt-3 md:pt-4 text-xs font-bold text-foreground">R$ {Number(sale.total).toFixed(2)}</TableCell>
                     </TableRow>

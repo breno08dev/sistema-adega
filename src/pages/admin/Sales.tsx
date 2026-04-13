@@ -24,7 +24,7 @@ type Sale = Omit<SalesRow, 'profiles'> & {
   sale_payments: SalePayment[];
 };
 
-const paymentMethodLabels: Record<PaymentMethod, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito" };
+const paymentMethodLabels: Record<PaymentMethod, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito", fiado: "Fiado" };
 const ITEMS_PER_PAGE = 50;
 
 export default function AdminSales() {
@@ -140,23 +140,28 @@ export default function AdminSales() {
     }
   };
 
-  const renderPaymentBadge = (sale: Sale) => {
-    if (sale.sale_payments && sale.sale_payments.length > 0) {
+const renderPaymentBadge = (sale: any) => {
+    if (sale.sale_payments && sale.sale_payments.length > 1) {
       return (
         <div className="flex flex-col gap-1 items-start">
-          {sale.sale_payments.map((p, idx) => (
-            <Badge key={idx} variant="outline" className="bg-muted text-foreground border-border text-[10px] md:text-xs whitespace-nowrap">
+          <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-[10px] md:text-xs font-bold">Misto</Badge>
+          {sale.sale_payments.map((p: any, idx: number) => (
+            <Badge key={idx} variant="outline" className="bg-muted text-foreground border-border text-[10px] md:text-xs shadow-none">
               {paymentMethodLabels[p.metodo_pagamento]}: R$ {Number(p.valor).toFixed(2)}
             </Badge>
           ))}
         </div>
       );
+    } else if (sale.sale_payments && sale.sale_payments.length === 1) {
+        const isFiado = sale.sale_payments[0].metodo_pagamento === 'fiado';
+        return <Badge variant="outline" className={`text-[10px] md:text-xs border-border ${isFiado ? 'text-orange-500 bg-orange-500/10' : 'text-foreground'}`}>{paymentMethodLabels[sale.sale_payments[0].metodo_pagamento]}</Badge>;
     } else if (sale.metodo_pagamento) { 
-      return <Badge variant="outline" className="text-[10px] md:text-xs whitespace-nowrap border-border">{paymentMethodLabels[sale.metodo_pagamento]}</Badge>;
+        const isFiado = sale.metodo_pagamento === 'fiado';
+        return <Badge variant="outline" className={`text-[10px] md:text-xs border-border ${isFiado ? 'text-orange-500 bg-orange-500/10' : 'text-foreground'}`}>{paymentMethodLabels[sale.metodo_pagamento]}</Badge>;
     }
     return <Badge variant="destructive" className="text-[10px] md:text-xs">N/A</Badge>;
   };
-
+  
   const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
   const setQuickDate = (daysBackStart: number, daysBackEnd: number = 0) => { setDate({ from: subDays(new Date(), daysBackStart), to: subDays(new Date(), daysBackEnd) }); };
 

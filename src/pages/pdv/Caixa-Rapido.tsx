@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Plus, Minus, Search, ShoppingCart, DollarSign, Package, Lock, Trash2, Loader2 } from "lucide-react";
+import { Plus, Minus, Search, ShoppingCart, DollarSign, Package, Lock, Trash2, Loader2, Barcode, User } from "lucide-react";
 import { Database } from "@/integrations/supabase/types";
 import { useAuth } from "@/contexts/AuthContext";
 import { Label } from "@/components/ui/label";
@@ -16,15 +16,18 @@ import { Badge } from "@/components/ui/badge";
 // --- TIPOS ---
 type ProductRow = Database["public"]["Tables"]["products"]["Row"];
 type Category = Database["public"]["Tables"]["categories"]["Row"];
-type Product = ProductRow & { categories: { nome: string } | null; };
+type Product = ProductRow & { categories: { nome: string } | null; codigo_barras?: string; };
 type CartItem = Product & { quantidade_venda: number; };
-type PaymentMethod = Database["public"]["Enums"]["payment_method"];
+type PaymentMethod = "dinheiro" | "pix" | "cartao_credito" | "cartao_debito" | "fiado"; // Atualizado para incluir fiado
 type CaixaStatus = "aberto" | "fechado" | "loading";
+
+interface Client { id: string; nome: string; cpf: string | null; }
 
 export default function CaixaRapido() {
   const { user } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [clients, setClients] = useState<Client[]>([]); // NOVO: Lista de clientes
   const [cart, setCart] = useState<CartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -42,16 +45,24 @@ export default function CaixaRapido() {
   const [currentMethod, setCurrentMethod] = useState<PaymentMethod | "">("");
   const [currentAmount, setCurrentAmount] = useState("");
 
+  // NOVO: Estados para a busca de clientes no Fiado
+  const [selectedClienteId, setSelectedClienteId] = useState("");
+  const [selectedClienteNome, setSelectedClienteNome] = useState("");
+  const [mostrarSugestoesCliente, setMostrarSugestoesCliente] = useState(false);
+
   // --- CARREGAMENTO DE DADOS ---
   const loadData = async () => {
     setLoading(true);
     try {
       const { data: prodData } = await supabase.from('products').select('*, categories(nome)').order('nome');
       const { data: catData } = await supabase.from('categories').select('*').order('nome');
+      const { data: cliData } = await supabase.from('clients').select('id, nome, cpf').order('nome'); // Busca clientes
+      
       if (prodData) setProducts(prodData as Product[]);
       if (catData) setCategories(catData);
+      if (cliData) setClients(cliData);
     } catch (error) { 
-      toast.error("Erro ao carregar catálogo de produtos"); 
+      toast.error("Erro ao carregar dados"); 
     } finally { 
       setLoading(false); 
     }
@@ -80,7 +91,22 @@ export default function CaixaRapido() {
 
   useEffect(() => { checkCaixaStatus(); }, [user]);
 
-  // --- LÓGICA DE STOCK EM TEMPO REAL (MÓDULO VISUAL) ---
+  // --- LEITOR DE CÓDIGO DE BARRAS ---
+  useEffect(() => {
+    if (searchTerm && caixaStatus === 'aberto') {
+      const match = products.find(p => p.codigo_barras === searchTerm);
+      if (match) {
+        if (getAvailableStock(match.id) > 0) {
+            addToCart(match);
+        } else {
+            toast.error(`Estoque insuficiente para ${match.nome}!`);
+        }
+        setSearchTerm(""); 
+      }
+    }
+  }, [searchTerm, products, caixaStatus, cart]); 
+
+  // --- LÓGICA DE STOCK ---
   const getAvailableStock = (productId: string) => {
     const product = products.find(p => p.id === productId);
     if (!product) return 0;
@@ -91,7 +117,8 @@ export default function CaixaRapido() {
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      const matchesSearch = p.nome.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesSearch = p.nome.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            (p.codigo_barras && p.codigo_barras.includes(searchTerm));
       const matchesCategory = selectedCategory === 'all' || p.categoria_id === selectedCategory;
       return matchesSearch && matchesCategory;
     });
@@ -104,7 +131,6 @@ export default function CaixaRapido() {
         return; 
     }
     
-    // Verificação de stock instantânea
     if (getAvailableStock(product.id) <= 0) {
         toast.error(`Estoque insuficiente para ${product.nome}!`);
         return;
@@ -124,7 +150,6 @@ export default function CaixaRapido() {
 
       const existingItem = prevCart.find(item => item.id === productId);
       if (existingItem && newAmount > existingItem.quantidade_venda) {
-          // Se está a aumentar no carrinho, verificar se tem stock
           if (getAvailableStock(productId) <= 0) {
               toast.error("Não há mais stock disponível!");
               return prevCart;
@@ -157,25 +182,37 @@ export default function CaixaRapido() {
     setPayments([]); 
     setCurrentMethod(""); 
     setCurrentAmount(totalCompra.toFixed(2)); 
+    setSelectedClienteId("");
+    setSelectedClienteNome("");
+    setMostrarSugestoesCliente(false);
     setIsPaymentModalOpen(true);
   };
 
-  // --- FINALIZAÇÃO E ATUALIZAÇÃO DO BANCO (STOCK E VENDAS) ---
+  // --- FINALIZAÇÃO DA VENDA ---
   const handleFinalizeSale = async () => {
     if (!user || cart.length === 0 || !caixaId) return;
     if (caixaStatus !== 'aberto') return toast.error("Caixa fechado!");
     if (totalPago < totalCompra) return toast.error("O valor pago é insuficiente!");
 
+    // VALIDAÇÃO DO FIADO
+    const hasFiado = payments.some(p => p.method === 'fiado');
+    if (hasFiado && !selectedClienteId) {
+        toast.error("Para vender a FIADO, é obrigatório buscar e selecionar um cliente cadastrado.");
+        return;
+    }
+
     setIsSubmitting(true);
     try {
-      // 1. Criar a Venda Mestra
       const metodoPrincipal = payments.length > 0 ? payments[0].method : null;
+      
+      // 1. Criar a Venda Mestra (Vinculando o cliente se existir)
       const { data: saleData, error: saleError } = await supabase.from('sales').insert({ 
           colaborador_id: user.id, 
           caixa_id: caixaId, 
           status: 'finalizada', 
           total: totalCompra, 
-          metodo_pagamento: metodoPrincipal 
+          metodo_pagamento: metodoPrincipal,
+          cliente_id: selectedClienteId || null
       }).select().single();
       if (saleError) throw saleError;
 
@@ -202,9 +239,19 @@ export default function CaixaRapido() {
       const { error: payError } = await supabase.from('sale_payments').insert(paymentInserts);
       if (payError) throw payError;
 
-      // 4. ABATER STOCK DEFINITIVAMENTE NO BANCO DE DADOS
+      // 4. LÓGICA DE FIADO (Se houver fiado, lança para o cliente)
+      if (hasFiado) {
+          const valorFiado = payments.filter(p => p.method === 'fiado').reduce((acc, p) => acc + p.value, 0);
+          const { data: cred } = await supabase.from('crediarios').select('*').eq('cliente_id', selectedClienteId).eq('status', 'aberto').maybeSingle();
+          if (cred) {
+              await supabase.from('crediarios').update({ valor_total: cred.valor_total + valorFiado }).eq('id', cred.id);
+          } else {
+              await supabase.from('crediarios').insert([{ cliente_id: selectedClienteId, valor_total: valorFiado, status: 'aberto' }]);
+          }
+      }
+
+      // 5. ABATER STOCK DEFINITIVAMENTE NO BANCO DE DADOS
       for (const item of cart) {
-          // Procuramos a quantidade atual exata no DB antes de subtrair, para não haver erros de corrida
           const { data: pData } = await supabase.from('products').select('quantidade').eq('id', item.id).single();
           if (pData) {
               await supabase.from('products').update({ 
@@ -216,8 +263,6 @@ export default function CaixaRapido() {
       toast.success("Venda finalizada com sucesso!");
       setCart([]); 
       setIsPaymentModalOpen(false);
-      
-      // 5. Recarregar os produtos para atualizar a tela principal
       loadData();
       
     } catch (error: any) { 
@@ -262,7 +307,7 @@ export default function CaixaRapido() {
     }
   };
 
-  const paymentLabels: Record<string, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito" };
+  const paymentLabels: Record<string, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito", fiado: "Fiado (Crediário)" };
 
   return (
     <div className="flex h-[calc(100vh-5rem)] gap-4 overflow-hidden p-2 md:p-0 animate-in fade-in duration-500">
@@ -278,8 +323,14 @@ export default function CaixaRapido() {
             </div>
             <div className="flex flex-col md:flex-row gap-2">
                 <div className="relative flex-1">
-                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input placeholder="Pesquisar produto..." className="pl-9 bg-background border-border h-10 text-foreground" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                    <Barcode className="absolute left-3 top-2.5 h-5 w-5 text-muted-foreground" />
+                    <Input 
+                        placeholder="Pesquisar ou Bipar Código..." 
+                        className="pl-10 bg-background border-border h-10 text-foreground" 
+                        value={searchTerm} 
+                        onChange={(e) => setSearchTerm(e.target.value)} 
+                        autoFocus={caixaStatus === 'aberto'} 
+                    />
                 </div>
                 <Select value={selectedCategory} onValueChange={setSelectedCategory}>
                     <SelectTrigger className="w-full md:w-[200px] bg-background border-border h-10 text-foreground">
@@ -318,7 +369,6 @@ export default function CaixaRapido() {
                             </div>
                             <div className="flex justify-between items-end mt-2">
                                 <div className="flex flex-col">
-                                    {/* AQUI APARECE O STOCK JÁ ABATIDO VISUALMENTE */}
                                     <span className={`text-[10px] font-bold ${isOutOfStock ? 'text-destructive' : 'text-muted-foreground'}`}>
                                         Stock: {availableStock}
                                     </span>
@@ -414,12 +464,12 @@ export default function CaixaRapido() {
         </CardFooter>
       </Card>
 
-      {/* MODAL DE PAGAMENTO (DIVISÃO / TROCO) */}
+      {/* MODAL DE PAGAMENTO E FINALIZAÇÃO */}
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="sm:max-w-xl bg-card border-border p-6 shadow-2xl">
           <DialogHeader><DialogTitle className="text-2xl font-bold text-foreground">Pagamento e Finalização</DialogTitle></DialogHeader>
           
-          <div className="grid grid-cols-2 gap-4 my-4">
+          <div className="grid grid-cols-2 gap-4 my-2">
               <div className="bg-muted/30 border border-border p-4 rounded-xl flex flex-col justify-center items-center">
                   <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Total da Venda</span>
                   <span className="text-3xl font-extrabold text-foreground">R$ {totalCompra.toFixed(2)}</span>
@@ -428,6 +478,51 @@ export default function CaixaRapido() {
                   <span className="text-xs uppercase font-bold tracking-wider">{faltaPagar === 0 ? 'Troco a Devolver' : 'Falta Pagar'}</span>
                   <span className="text-3xl font-extrabold">R$ {faltaPagar === 0 ? troco.toFixed(2) : faltaPagar.toFixed(2)}</span>
               </div>
+          </div>
+
+          {/* BUSCA DE CLIENTE (Necessário para Fiado) */}
+          <div className="space-y-2 relative mt-2">
+              <Label className="text-foreground font-semibold flex items-center gap-2">
+                  <User className="h-4 w-4" /> Vincular Cliente {payments.some(p => p.method === 'fiado') || currentMethod === 'fiado' ? <span className="text-destructive">(Obrigatório para Fiado)</span> : "(Opcional)"}
+              </Label>
+              <div className="relative">
+                  <Search className="absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
+                  <Input 
+                      value={selectedClienteNome} 
+                      onChange={(e) => {
+                          setSelectedClienteNome(e.target.value);
+                          setSelectedClienteId(""); // Reseta o ID se digitar
+                          setMostrarSugestoesCliente(true);
+                      }} 
+                      onFocus={() => setMostrarSugestoesCliente(true)}
+                      onBlur={() => setTimeout(() => setMostrarSugestoesCliente(false), 200)}
+                      placeholder="Busque por Nome ou CPF..." 
+                      className="pl-10 h-12 bg-background border-border text-foreground" 
+                  />
+              </div>
+
+              {mostrarSugestoesCliente && selectedClienteNome && !selectedClienteId && (
+                  <div className="absolute top-[100%] left-0 w-full bg-card border border-border rounded-md shadow-lg z-50 max-h-40 overflow-y-auto mt-1">
+                      {clients.filter(c => c.nome.toLowerCase().includes(selectedClienteNome.toLowerCase()) || (c.cpf && c.cpf.includes(selectedClienteNome))).length === 0 ? (
+                          <div className="p-3 text-sm text-muted-foreground text-center">Nenhum cliente cadastrado encontrado.</div>
+                      ) : (
+                          clients.filter(c => c.nome.toLowerCase().includes(selectedClienteNome.toLowerCase()) || (c.cpf && c.cpf.includes(selectedClienteNome))).map(cli => (
+                              <div
+                                  key={cli.id}
+                                  className="p-3 hover:bg-muted cursor-pointer text-sm flex flex-col border-b border-border last:border-0"
+                                  onClick={() => {
+                                      setSelectedClienteId(cli.id);
+                                      setSelectedClienteNome(cli.nome);
+                                      setMostrarSugestoesCliente(false);
+                                  }}
+                              >
+                                  <span className="font-bold text-foreground">{cli.nome}</span>
+                                  {cli.cpf && <span className="text-xs text-muted-foreground">CPF: {cli.cpf}</span>}
+                              </div>
+                          ))
+                      )}
+                  </div>
+              )}
           </div>
           
           <div className="grid grid-cols-12 gap-3 mt-4">
@@ -440,6 +535,7 @@ export default function CaixaRapido() {
                       <SelectItem value="pix" className="hover:bg-muted font-medium">Pix</SelectItem>
                       <SelectItem value="cartao_debito" className="hover:bg-muted font-medium">Débito</SelectItem>
                       <SelectItem value="cartao_credito" className="hover:bg-muted font-medium">Crédito</SelectItem>
+                      <SelectItem value="fiado" className="hover:bg-muted font-bold text-orange-500">Fiado (Crediário)</SelectItem>
                   </SelectContent>
               </Select>
               <div className="col-span-4 relative">
@@ -451,7 +547,7 @@ export default function CaixaRapido() {
               </Button>
           </div>
           
-          <div className="mt-4 border border-border rounded-xl max-h-40 overflow-y-auto bg-muted/10 shadow-inner">
+          <div className="mt-4 border border-border rounded-xl max-h-32 overflow-y-auto bg-muted/10 shadow-inner">
               <Table>
                   <TableHeader>
                       <TableRow className="border-border hover:bg-transparent">
@@ -461,10 +557,10 @@ export default function CaixaRapido() {
                       </TableRow>
                   </TableHeader>
                   <TableBody>
-                      {payments.length === 0 && <TableRow className="border-border hover:bg-transparent"><TableCell colSpan={3} className="text-center text-muted-foreground py-6 text-sm">Nenhum valor inserido.</TableCell></TableRow>}
+                      {payments.length === 0 && <TableRow className="border-border hover:bg-transparent"><TableCell colSpan={3} className="text-center text-muted-foreground py-4 text-sm">Nenhum valor inserido.</TableCell></TableRow>}
                       {payments.map((p, i) => (
                           <TableRow key={i} className="border-border hover:bg-muted/30">
-                              <TableCell className="font-bold text-foreground">{paymentLabels[p.method]}</TableCell>
+                              <TableCell className={`font-bold ${p.method === 'fiado' ? 'text-orange-500' : 'text-foreground'}`}>{paymentLabels[p.method]}</TableCell>
                               <TableCell className="text-right font-extrabold text-foreground text-lg">R$ {p.value.toFixed(2)}</TableCell>
                               <TableCell><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleRemovePayment(i)}><Trash2 className="h-4 w-4" /></Button></TableCell>
                           </TableRow>
@@ -473,7 +569,7 @@ export default function CaixaRapido() {
               </Table>
           </div>
           
-          <DialogFooter className="mt-6 pt-4 border-t border-border">
+          <DialogFooter className="mt-4 pt-4 border-t border-border">
               <Button className="w-full h-16 text-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg shadow-emerald-600/20" onClick={handleFinalizeSale} disabled={totalPago < totalCompra || isSubmitting}>
                   {isSubmitting ? <><Loader2 className="mr-2 h-6 w-6 animate-spin" /> PROCESSANDO...</> : "CONFIRMAR E FINALIZAR"}
               </Button>

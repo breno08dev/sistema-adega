@@ -2,14 +2,14 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Plus, Pencil, Trash2, Search, Package, AlertTriangle } from "lucide-react"; 
+import { Plus, Pencil, Trash2, Search, Package, AlertTriangle, ChevronLeft, ChevronRight, Barcode } from "lucide-react"; 
 import { Database } from "@/integrations/supabase/types";
 
 // --- TIPOS ---
@@ -18,6 +18,7 @@ type Category = Database["public"]["Tables"]["categories"]["Row"];
 
 type Product = ProductRow & {
   categories: { nome: string } | null;
+  codigo_barras?: string; // NOVO: Tipagem do código de barras
 };
 
 export default function Products() {
@@ -33,11 +34,16 @@ export default function Products() {
   
   const [searchTerm, setSearchTerm] = useState("");
 
+  // Paginação NOVO
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
+
   const [nome, setNome] = useState("");
   const [categoriaId, setCategoriaId] = useState("");
   const [precoVenda, setPrecoVenda] = useState("");
   const [custo, setCusto] = useState("");
   const [quantidade, setQuantidade] = useState("");
+  const [codigoBarras, setCodigoBarras] = useState(""); // NOVO: Estado do código de barras
 
   useEffect(() => {
     loadProducts();
@@ -80,6 +86,7 @@ export default function Products() {
       preco_venda: parseFloat(precoVenda),
       custo: parseFloat(custo),
       quantidade: parseInt(quantidade),
+      codigo_barras: codigoBarras || null // NOVO: Salvando no banco
     };
 
     if (editingProduct) {
@@ -108,6 +115,7 @@ export default function Products() {
     setPrecoVenda(product.preco_venda.toString());
     setCusto(product.custo.toString());
     setQuantidade(product.quantidade.toString());
+    setCodigoBarras(product.codigo_barras || ""); // NOVO: Carregando no form
     setIsOpen(true);
   };
 
@@ -138,13 +146,24 @@ export default function Products() {
     setPrecoVenda("");
     setCusto("");
     setQuantidade("");
+    setCodigoBarras(""); // NOVO: Resetando campo
     setEditingProduct(null);
     setIsOpen(false);
   };
 
+  // Resetar a página ao fazer uma busca
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+  // Lógica de Filtro e Paginação
   const filteredProducts = products.filter(p => 
-    p.nome.toLowerCase().includes(searchTerm.toLowerCase())
+    p.nome.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (p.codigo_barras && p.codigo_barras.includes(searchTerm))
   );
+
+  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage);
+  const paginatedProducts = filteredProducts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   const renderContent = () => {
     if (loading) {
@@ -169,14 +188,21 @@ export default function Products() {
       <>
         {/* VISÃO MOBILE */}
         <div className="md:hidden grid gap-4">
-          {filteredProducts.map((product) => (
+          {paginatedProducts.map((product) => (
             <div key={product.id} className="bg-card border border-border rounded-xl p-4 shadow-sm active:scale-[0.98] transition-transform">
               <div className="flex justify-between items-start mb-3">
                 <div className="flex flex-col">
                   <h3 className="font-semibold text-foreground">{product.nome}</h3>
-                  <span className="inline-flex w-fit items-center px-2 py-0.5 rounded text-xs font-medium bg-secondary text-secondary-foreground mt-1">
-                    {product.categories?.nome || "Sem categoria"}
-                  </span>
+                  <div className="flex gap-2 items-center mt-1">
+                    <span className="inline-flex w-fit items-center px-2 py-0.5 rounded text-xs font-medium bg-secondary text-secondary-foreground">
+                      {product.categories?.nome || "Sem categoria"}
+                    </span>
+                    {product.codigo_barras && (
+                      <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                        <Barcode className="h-3 w-3" /> {product.codigo_barras}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex gap-1 flex-shrink-0">
                   <Button variant="ghost" size="icon" className="h-8 w-8 text-primary hover:text-primary hover:bg-primary/10" onClick={() => handleEdit(product)}>
@@ -210,6 +236,7 @@ export default function Products() {
           <Table>
             <TableHeader className="bg-muted/50 border-border">
               <TableRow className="border-border hover:bg-transparent">
+                <TableHead className="font-semibold text-muted-foreground w-12"><Barcode className="h-4 w-4"/></TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Nome do Produto</TableHead>
                 <TableHead className="font-semibold text-muted-foreground">Categoria</TableHead>
                 <TableHead className="text-right font-semibold text-muted-foreground">Custo</TableHead>
@@ -219,8 +246,9 @@ export default function Products() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredProducts.map((product) => (
+              {paginatedProducts.map((product) => (
                 <TableRow key={product.id} className="hover:bg-muted/30 transition-colors border-border">
+                  <TableCell className="text-muted-foreground text-xs">{product.codigo_barras || '-'}</TableCell>
                   <TableCell className="font-medium text-foreground">{product.nome}</TableCell>
                   <TableCell>
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20">
@@ -263,6 +291,33 @@ export default function Products() {
             </TableBody>
           </Table>
         </div>
+
+        {/* CONTROLES DE PAGINAÇÃO */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-2 py-4">
+            <p className="text-sm text-muted-foreground">Página {currentPage} de {totalPages}</p>
+            <div className="flex items-center gap-2">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))} 
+                disabled={currentPage === 1}
+                className="bg-background text-foreground border-border"
+              >
+                <ChevronLeft className="h-4 w-4 mr-1"/> Anterior
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} 
+                disabled={currentPage === totalPages}
+                className="bg-background text-foreground border-border"
+              >
+                Próxima <ChevronRight className="h-4 w-4 ml-1"/>
+              </Button>
+            </div>
+          </div>
+        )}
       </>
     );
   };
@@ -279,7 +334,7 @@ export default function Products() {
             <div className="relative w-full sm:w-auto">
                 <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                 <Input 
-                  placeholder="Buscar produto..." 
+                  placeholder="Buscar por nome ou código..." 
                   className="pl-8 w-full sm:w-[200px] lg:w-[300px] bg-background border-border text-foreground"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
@@ -302,6 +357,21 @@ export default function Products() {
                     </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-6 py-4">
+                    {/* NOVO CAMPO: CÓDIGO DE BARRAS */}
+                    <div className="space-y-2">
+                        <Label htmlFor="codigo_barras" className="text-foreground flex items-center gap-2">
+                          <Barcode className="h-4 w-4" /> Código de Barras (Opcional)
+                        </Label>
+                        <Input
+                            id="codigo_barras"
+                            value={codigoBarras}
+                            onChange={(e) => setCodigoBarras(e.target.value)}
+                            placeholder="Bipe ou digite o código"
+                            className="bg-background border-border text-foreground"
+                            autoFocus
+                        />
+                    </div>
+
                     <div className="space-y-2">
                     <Label htmlFor="nome" className="text-foreground">Nome do Produto</Label>
                     <Input

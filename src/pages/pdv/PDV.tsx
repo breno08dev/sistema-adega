@@ -19,32 +19,37 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { Plus, ShoppingCart, User, List, Minus, Search, Trash2, ChevronRight, Lock, Loader2 } from "lucide-react"; 
+import { Plus, ShoppingCart, User, List, Minus, Search, Trash2, ChevronRight, Loader2, Barcode } from "lucide-react"; 
 
-type PaymentMethod = "dinheiro" | "pix" | "cartao_credito" | "cartao_debito";
+type PaymentMethod = "dinheiro" | "pix" | "cartao_credito" | "cartao_debito" | "fiado";
 
-interface Product { id: string; nome: string; preco_venda: number; quantidade: number; }
+interface Product { id: string; nome: string; preco_venda: number; quantidade: number; codigo_barras?: string; }
 interface SaleItem { id: string; produto_id: string; nome: string; quantidade: number; preco_unitario: number; subtotal: number; }
-interface OpenSale { id: string; nome_cliente: string | null; numero_comanda: string | null; total: number; }
+interface OpenSale { id: string; nome_cliente: string | null; numero_comanda: string | null; total: number; cliente_id: string | null; }
 interface SelectedSale extends OpenSale { sale_items: SaleItem[]; }
+interface Client { id: string; nome: string; cpf: string | null; }
 
 export default function PDV() {
   const { user } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [openComandas, setOpenComandas] = useState<OpenSale[]>([]);
   const [selectedComanda, setSelectedComanda] = useState<SelectedSale | null>(null);
   const [caixaId, setCaixaId] = useState<string | null>(null);
 
+  // Estados do Modal de Nova Comanda
   const [isComandaModalOpen, setIsComandaModalOpen] = useState(false);
   const [isCancelAlertOpen, setIsCancelAlertOpen] = useState(false);
   const [newComandaNumber, setNewComandaNumber] = useState("");
-  const [newComandaName, setNewComandaName] = useState("");
+  
+  // Estados para a Busca Limpa de Clientes
+  const [newComandaClienteNome, setNewComandaClienteNome] = useState("");
+  const [newComandaClienteId, setNewComandaClienteId] = useState("");
+  const [mostrarSugestoes, setMostrarSugestoes] = useState(false);
 
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
-  // Prevenção de múltiplos cliques rápidos
   const [isUpdatingItem, setIsUpdatingItem] = useState(false);
 
   const [payments, setPayments] = useState<{ method: PaymentMethod; value: number }[]>([]);
@@ -54,8 +59,20 @@ export default function PDV() {
   useEffect(() => { 
     loadProducts(); 
     loadOpenComandas();
+    loadClients(); 
     checkCaixaStatus();
   }, [user]);
+
+  // LEITOR DE CÓDIGO DE BARRAS - AUTO-ADIÇÃO
+  useEffect(() => {
+    if (searchTerm && selectedComanda) {
+      const match = products.find(p => p.codigo_barras === searchTerm);
+      if (match) {
+        handleAddItem(match);
+        setSearchTerm("");
+      }
+    }
+  }, [searchTerm, products, selectedComanda]);
 
   const checkCaixaStatus = async () => {
     if (!user) return;
@@ -63,18 +80,21 @@ export default function PDV() {
       const { data } = await supabase.from("caixas").select("id").eq("colaborador_id", user.id).eq("status", "aberto").order("data_abertura", { ascending: false }).limit(1);
       if (data && data.length > 0) setCaixaId(data[0].id);
       else setCaixaId(null);
-    } catch {
-      setCaixaId(null);
-    }
+    } catch { setCaixaId(null); }
   };
 
   const loadProducts = async () => {
-    const { data } = await supabase.from('products').select('id, nome, preco_venda, quantidade').order('nome');
+    const { data } = await supabase.from('products').select('id, nome, preco_venda, quantidade, codigo_barras').order('nome');
     if (data) setProducts(data);
   };
 
+  const loadClients = async () => {
+    const { data } = await supabase.from('clients').select('id, nome, cpf').order('nome');
+    if (data) setClients(data);
+  };
+
   const loadOpenComandas = async () => {
-    const { data, error } = await supabase.from('sales').select('id, nome_cliente, numero_comanda, total').eq('status', 'aberta').order('created_at', { ascending: true });
+    const { data, error } = await supabase.from('sales').select('id, nome_cliente, numero_comanda, total, cliente_id').eq('status', 'aberta').order('created_at', { ascending: true });
     if (!error && data) setOpenComandas(data);
   };
 
@@ -99,11 +119,28 @@ export default function PDV() {
     if (!user || !caixaId) return toast.error("Caixa Fechado", { description: "Abra o caixa no 'Caixa Rápido' antes de iniciar comandas." });
     
     setIsSubmitting(true);
-    const { data } = await supabase.from('sales').insert([{ colaborador_id: user.id, caixa_id: caixaId, nome_cliente: newComandaName || null, numero_comanda: newComandaNumber || null, status: 'aberta' }]).select().single();
-    if (data) {
+    
+    const payload = {
+        colaborador_id: user.id, 
+        caixa_id: caixaId, 
+        nome_cliente: newComandaClienteNome || null, 
+        numero_comanda: newComandaNumber || null, 
+        cliente_id: newComandaClienteId && newComandaClienteId !== '' ? newComandaClienteId : null,
+        status: 'aberta' 
+    };
+
+    const { data, error } = await supabase.from('sales').insert([payload]).select().single();
+
+    if (error) {
+        toast.error("Erro ao criar comanda", { description: error.message });
+    } else if (data) {
       toast.success(`Comanda #${data.numero_comanda || ''} aberta!`);
-      setIsComandaModalOpen(false); setNewComandaName(""); setNewComandaNumber("");
-      await loadOpenComandas(); await handleSelectComanda(data.id);
+      setIsComandaModalOpen(false); 
+      setNewComandaClienteNome(""); 
+      setNewComandaNumber(""); 
+      setNewComandaClienteId("");
+      await loadOpenComandas(); 
+      await handleSelectComanda(data.id);
     }
     setIsSubmitting(false);
   };
@@ -113,7 +150,9 @@ export default function PDV() {
     const { error } = await supabase.from('sales').delete().eq('id', selectedComanda.id);
     if (!error) {
       toast.success("Comanda cancelada com sucesso!");
-      setSelectedComanda(null); loadOpenComandas(); setIsCancelAlertOpen(false);
+      setSelectedComanda(null); 
+      loadOpenComandas(); 
+      setIsCancelAlertOpen(false);
     }
   };
 
@@ -128,6 +167,23 @@ export default function PDV() {
     setIsSubmitting(true);
     try {
       const metodoPrincipal = payments.length > 0 ? payments[0].method : null;
+
+      // LÓGICA DE FIADO (CREDIÁRIO)
+      if (metodoPrincipal === 'fiado' || payments.some(p => p.method === 'fiado')) {
+          if (!selectedComanda.cliente_id) {
+              throw new Error("Para vender FIADO, a comanda deve estar vinculada a um Cliente Cadastrado.");
+          }
+          
+          const valorFiado = payments.filter(p => p.method === 'fiado').reduce((acc, p) => acc + p.value, 0);
+
+          const { data: cred } = await supabase.from('crediarios').select('*').eq('cliente_id', selectedComanda.cliente_id).eq('status', 'aberto').maybeSingle();
+          if (cred) {
+              await supabase.from('crediarios').update({ valor_total: cred.valor_total + valorFiado }).eq('id', cred.id);
+          } else {
+              await supabase.from('crediarios').insert([{ cliente_id: selectedComanda.cliente_id, valor_total: valorFiado, status: 'aberto' }]);
+          }
+      }
+
       const { error } = await supabase.from('sales').update({ status: 'finalizada', caixa_id: caixaId, metodo_pagamento: metodoPrincipal }).eq('id', selectedComanda.id);
       if (error) throw error;
 
@@ -146,16 +202,13 @@ export default function PDV() {
     } catch (e: any) { toast.error("Erro", { description: e.message }); } finally { setIsSubmitting(false); }
   };
 
-  // --- LÓGICA DE ESTOQUE TEMPO REAL (COMANDAS) ---
   const handleAddItem = async (product: Product) => {
     if (!selectedComanda || isUpdatingItem) return;
     if (product.quantidade <= 0) return toast.error(`Estoque insuficiente para ${product.nome}!`);
     
     setIsUpdatingItem(true);
     try {
-        // Abate imediato no banco (Pois a comanda já está aberta no DB)
         await supabase.from('products').update({ quantidade: product.quantidade - 1 }).eq('id', product.id);
-        
         const existingItem = selectedComanda.sale_items.find(item => item.produto_id === product.id);
         if (existingItem) {
             await supabase.from('sale_items').update({ quantidade: existingItem.quantidade + 1, subtotal: (existingItem.quantidade + 1) * existingItem.preco_unitario }).eq('id', existingItem.id);
@@ -163,24 +216,19 @@ export default function PDV() {
             await supabase.from('sale_items').insert([{ venda_id: selectedComanda.id, produto_id: product.id, quantidade: 1, preco_unitario: product.preco_venda, subtotal: product.preco_venda }]);
         }
         await refreshData();
-    } finally {
-        setIsUpdatingItem(false);
-    }
+    } finally { setIsUpdatingItem(false); }
   };
 
   const handleIncrementItem = async (item: SaleItem) => {
     if (isUpdatingItem) return;
     const product = products.find(p => p.id === item.produto_id);
     if (!product || product.quantidade <= 0) return toast.error("Não há mais stock disponível!");
-    
     setIsUpdatingItem(true);
     try {
         await supabase.from('products').update({ quantidade: product.quantidade - 1 }).eq('id', product.id);
         await supabase.from('sale_items').update({ quantidade: item.quantidade + 1, subtotal: (item.quantidade + 1) * item.preco_unitario }).eq('id', item.id);
         await refreshData();
-    } finally {
-        setIsUpdatingItem(false);
-    }
+    } finally { setIsUpdatingItem(false); }
   };
 
   const handleDecrementItem = async (item: SaleItem) => {
@@ -188,25 +236,19 @@ export default function PDV() {
     setIsUpdatingItem(true);
     try {
         const product = products.find(p => p.id === item.produto_id);
-        // Devolve o stock ao banco de dados
         if (product) await supabase.from('products').update({ quantidade: product.quantidade + 1 }).eq('id', product.id);
-        
-        if (item.quantidade === 1) {
-            await supabase.from('sale_items').delete().eq('id', item.id);
-        } else {
-            await supabase.from('sale_items').update({ quantidade: item.quantidade - 1, subtotal: (item.quantidade - 1) * item.preco_unitario }).eq('id', item.id);
-        }
+        if (item.quantidade === 1) await supabase.from('sale_items').delete().eq('id', item.id);
+        else await supabase.from('sale_items').update({ quantidade: item.quantidade - 1, subtotal: (item.quantidade - 1) * item.preco_unitario }).eq('id', item.id);
         await refreshData();
-    } finally {
-        setIsUpdatingItem(false);
-    }
+    } finally { setIsUpdatingItem(false); }
   };
 
   const totalPago = useMemo(() => payments.reduce((sum, p) => sum + p.value, 0), [payments]);
   const faltaPagar = Math.max(0, (selectedComanda?.total || 0) - totalPago);
   const troco = Math.max(0, totalPago - (selectedComanda?.total || 0));
-  const filteredProducts = products.filter(p => p.nome.toLowerCase().includes(searchTerm.toLowerCase()));
-  const paymentLabels: Record<string, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito" };
+  
+  const filteredProducts = products.filter(p => p.nome.toLowerCase().includes(searchTerm.toLowerCase()) || (p.codigo_barras && p.codigo_barras.includes(searchTerm)));
+  const paymentLabels: Record<string, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito", fiado: "Fiado (Crediário)" };
 
   const handleAddPayment = () => {
     if (!currentMethod) return toast.error("Selecione a forma de pagamento");
@@ -225,7 +267,7 @@ export default function PDV() {
       </div>
 
       <div className="grid gap-3 grid-cols-1 lg:grid-cols-12 flex-1 min-h-0 px-2 pb-2">
-        {/* CARD COMANDAS ABERTAS */}
+        {/* CARD COMANDAS */}
         <Card className="lg:col-span-3 flex flex-col border border-border bg-card overflow-hidden h-full shadow-sm">
           <CardHeader className="p-4 border-b border-border flex-shrink-0 bg-muted/20">
             <div className="flex items-center justify-between">
@@ -249,16 +291,15 @@ export default function PDV() {
                 </div>
               </div>
             ))}
-            {openComandas.length === 0 && <div className="text-center py-10 text-muted-foreground text-sm font-medium">Nenhuma comanda aberta.</div>}
           </CardContent>
         </Card>
 
         {/* CARD PRODUTOS */}
         <Card className="lg:col-span-5 flex flex-col border border-border bg-card overflow-hidden h-full shadow-sm">
           <CardHeader className="p-4 border-b border-border flex-shrink-0 bg-muted/10">
-              <div className="relative">
-                  <Search className="absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
-                  <Input placeholder="Buscar produto..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} disabled={!selectedComanda} className="pl-10 bg-background border-border focus:bg-background transition-all h-12 text-lg text-foreground shadow-sm" />
+              <div className="relative flex items-center">
+                  <Barcode className="absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
+                  <Input placeholder="Buscar ou Bipar Código..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} disabled={!selectedComanda} className="pl-10 bg-background border-border focus:bg-background transition-all h-12 text-lg text-foreground shadow-sm" autoFocus={!!selectedComanda} />
               </div>
           </CardHeader>
           <CardContent className="flex-1 overflow-y-auto p-0 bg-muted/10 scrollbar-thin">
@@ -268,9 +309,7 @@ export default function PDV() {
                   const isDisabled = isOutOfStock || !selectedComanda || isUpdatingItem;
                   return (
                     <div key={product.id} onClick={() => !isDisabled && handleAddItem(product)} className={`flex items-center justify-between p-4 transition-colors 
-                        ${!selectedComanda ? 'opacity-50 cursor-not-allowed bg-muted/20' : 
-                        isOutOfStock ? 'opacity-60 cursor-not-allowed bg-destructive/5' : 'cursor-pointer hover:bg-muted/50 active:bg-muted'}`}>
-                      
+                        ${!selectedComanda ? 'opacity-50 cursor-not-allowed bg-muted/20' : isOutOfStock ? 'opacity-60 cursor-not-allowed bg-destructive/5' : 'cursor-pointer hover:bg-muted/50 active:bg-muted'}`}>
                       <div className="flex flex-col gap-1">
                           <span className={`font-bold text-base ${isOutOfStock ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{product.nome}</span>
                           <span className={`text-[10px] font-bold uppercase tracking-wider ${isOutOfStock ? 'text-destructive' : 'text-muted-foreground'}`}>Estoque: {product.quantidade}</span>
@@ -278,9 +317,7 @@ export default function PDV() {
                       <div className="flex items-center gap-3">
                           <span className={`font-extrabold text-lg px-2 py-1 rounded ${isOutOfStock ? 'text-muted-foreground' : 'text-foreground bg-secondary'}`}>R$ {Number(product.preco_venda).toFixed(2)}</span>
                           {selectedComanda && (
-                              <Button size="icon" variant="ghost" disabled={isDisabled} className={`h-10 w-10 rounded-full ${isOutOfStock ? 'bg-muted text-muted-foreground' : 'text-primary bg-primary/10 hover:bg-primary/20'}`}>
-                                  <Plus className="h-6 w-6" />
-                              </Button>
+                              <Button size="icon" variant="ghost" disabled={isDisabled} className={`h-10 w-10 rounded-full ${isOutOfStock ? 'bg-muted text-muted-foreground' : 'text-primary bg-primary/10 hover:bg-primary/20'}`}><Plus className="h-6 w-6" /></Button>
                           )}
                       </div>
                     </div>
@@ -293,12 +330,10 @@ export default function PDV() {
         {/* CARD CARRINHO */}
         <Card className="lg:col-span-4 flex flex-col border border-border shadow-md bg-card z-10 overflow-hidden h-full">
           <CardHeader className="p-4 bg-muted/30 border-b border-border flex-shrink-0">
-            <div className="flex items-center justify-between">
                 <CardTitle className="text-lg flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-primary/10 text-primary"><ShoppingCart className="h-5 w-5" /></div>
                     {selectedComanda ? <div className="flex flex-col leading-none"><span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Mesa / Comanda</span><span className="font-extrabold text-xl text-foreground">#{selectedComanda.numero_comanda || "S/N"}</span></div> : <span className="text-muted-foreground">Selecione uma mesa</span>}
                 </CardTitle>
-            </div>
           </CardHeader>
           <CardContent className="flex-1 overflow-y-auto p-0 scrollbar-thin bg-card">
             {selectedComanda ? (
@@ -332,9 +367,7 @@ export default function PDV() {
                                   <Button variant="ghost" size="icon" disabled={isUpdatingItem} className="h-7 w-7 hover:bg-primary/10 hover:text-primary rounded-md" onClick={() => handleIncrementItem(item)}><Plus className="h-3 w-3" /></Button>
                               </div>
                           </TableCell>
-                          <TableCell className="text-right pr-4 font-bold text-sm text-foreground align-middle">
-                              R$ {item.subtotal.toFixed(2)}
-                          </TableCell>
+                          <TableCell className="text-right pr-4 font-bold text-sm text-foreground align-middle">R$ {item.subtotal.toFixed(2)}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -347,21 +380,13 @@ export default function PDV() {
                 </div>
             )}
           </CardContent>
-          
           <CardFooter className="p-0 border-t border-border bg-card flex-shrink-0 flex flex-col z-20">
             <div className="flex justify-between items-center w-full px-5 py-4 border-b border-dashed border-border bg-muted/10">
                 <span className="text-muted-foreground font-bold uppercase text-xs tracking-wider">Total da Mesa</span>
                 <span className="text-4xl font-extrabold text-foreground tracking-tight">R$ {selectedComanda ? Number(selectedComanda.total).toFixed(2) : "0.00"}</span>
             </div>
             <div className="p-4 w-full bg-card">
-              <Button 
-                size="lg" 
-                className={`w-full h-16 font-extrabold text-xl shadow-lg text-white transition-all 
-                    ${!selectedComanda ? 'bg-muted text-muted-foreground border border-border cursor-not-allowed hover:bg-muted' : 
-                      selectedComanda?.sale_items.length === 0 ? 'bg-destructive hover:bg-destructive/90 shadow-destructive/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'}`} 
-                disabled={!selectedComanda || isUpdatingItem} 
-                onClick={handleAttemptFinishSale}
-              >
+              <Button size="lg" className={`w-full h-16 font-extrabold text-xl shadow-lg text-white transition-all ${!selectedComanda ? 'bg-muted text-muted-foreground border border-border cursor-not-allowed hover:bg-muted' : selectedComanda?.sale_items.length === 0 ? 'bg-destructive hover:bg-destructive/90 shadow-destructive/20' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20'}`} disabled={!selectedComanda || isUpdatingItem} onClick={handleAttemptFinishSale}>
                 {!selectedComanda ? "MESA NÃO SELECIONADA" : selectedComanda?.sale_items.length === 0 ? "CANCELAR COMANDA VAZIA" : "RECEBER PAGAMENTO"}
               </Button>
             </div>
@@ -369,25 +394,39 @@ export default function PDV() {
         </Card>
       </div>
 
+      {/* MODAL DE CANCELAMENTO DE COMANDA VAZIA - ESTAVA FALTANDO ESTA PARTE! */}
       <AlertDialog open={isCancelAlertOpen} onOpenChange={setIsCancelAlertOpen}>
         <AlertDialogContent className="bg-card border-border">
           <AlertDialogHeader>
-              <AlertDialogTitle className="text-foreground text-xl">Deseja cancelar esta comanda?</AlertDialogTitle>
-              <AlertDialogDescription className="text-muted-foreground text-base">Esta comanda está vazia. Ao confirmar, ela será removida permanentemente do sistema.</AlertDialogDescription>
+            <AlertDialogTitle className="text-foreground flex items-center gap-2">
+                <Trash2 className="h-5 w-5 text-destructive" />
+                Cancelar Comanda?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-foreground">
+              Esta comanda está vazia. Tem a certeza que deseja cancelá-la e removê-la da lista de mesas abertas?
+            </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="mt-4">
-              <AlertDialogCancel className="bg-background text-foreground border-border hover:bg-muted font-bold">Voltar</AlertDialogCancel>
-              <AlertDialogAction onClick={handleCancelComanda} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground font-bold">Sim, Cancelar</AlertDialogAction>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="bg-background text-foreground border-border hover:bg-muted">Não, manter</AlertDialogCancel>
+            <AlertDialogAction onClick={handleCancelComanda} className="bg-destructive hover:bg-destructive/90 text-destructive-foreground">
+              Sim, Cancelar
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
+      {/* MODAL PAGAMENTO */}
       <Dialog open={isPaymentModalOpen} onOpenChange={setIsPaymentModalOpen}>
         <DialogContent className="sm:max-w-xl bg-card border-border p-6 shadow-2xl">
-          <DialogHeader><DialogTitle className="text-2xl font-bold text-foreground">Pagamento da Comanda</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className="text-2xl font-bold text-foreground">Pagamento</DialogTitle></DialogHeader>
+          {selectedComanda?.cliente_id && (
+             <div className="bg-primary/10 text-primary p-3 rounded-md text-sm font-bold flex items-center gap-2">
+                 <User className="h-4 w-4" /> Comanda vinculada a Cliente Registado. Pode vender a Fiado.
+             </div>
+          )}
           <div className="grid grid-cols-2 gap-4 my-4">
             <div className="bg-muted/30 border border-border p-4 rounded-xl flex flex-col justify-center items-center">
-                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Total da Venda</span>
+                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Total</span>
                 <span className="text-3xl font-extrabold text-foreground">R$ {Number(selectedComanda?.total).toFixed(2)}</span>
             </div>
             <div className={`p-4 rounded-xl flex flex-col justify-center items-center border-2 transition-colors ${faltaPagar === 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500' : 'bg-orange-500/10 border-orange-500/30 text-orange-500'}`}>
@@ -399,10 +438,11 @@ export default function PDV() {
             <Select value={currentMethod} onValueChange={(val: any) => setCurrentMethod(val)}>
                 <SelectTrigger className="col-span-6 h-12 bg-background border-border text-foreground font-medium"><SelectValue placeholder="Forma de Pgto" /></SelectTrigger>
                 <SelectContent className="bg-card border-border">
-                    <SelectItem value="dinheiro" className="hover:bg-muted font-medium">Dinheiro</SelectItem>
-                    <SelectItem value="pix" className="hover:bg-muted font-medium">Pix</SelectItem>
-                    <SelectItem value="cartao_debito" className="hover:bg-muted font-medium">Débito</SelectItem>
-                    <SelectItem value="cartao_credito" className="hover:bg-muted font-medium">Crédito</SelectItem>
+                    <SelectItem value="dinheiro">Dinheiro</SelectItem>
+                    <SelectItem value="pix">Pix</SelectItem>
+                    <SelectItem value="cartao_debito">Débito</SelectItem>
+                    <SelectItem value="cartao_credito">Crédito</SelectItem>
+                    {selectedComanda?.cliente_id && <SelectItem value="fiado" className="text-orange-500 font-bold">Fiado (Crediário)</SelectItem>}
                 </SelectContent>
             </Select>
             <div className="col-span-4 relative">
@@ -415,12 +455,11 @@ export default function PDV() {
              <Table>
                  <TableHeader><TableRow className="border-border hover:bg-transparent"><TableHead className="text-muted-foreground font-bold text-xs uppercase">Método</TableHead><TableHead className="text-right text-muted-foreground font-bold text-xs uppercase">Valor</TableHead><TableHead className="w-[50px]"></TableHead></TableRow></TableHeader>
                 <TableBody>
-                  {payments.length === 0 && <TableRow className="border-border hover:bg-transparent"><TableCell colSpan={3} className="text-center text-muted-foreground py-6 text-sm">Nenhum valor inserido.</TableCell></TableRow>}
                   {payments.map((p, i) => (
                       <TableRow key={i} className="border-border hover:bg-muted/30">
                           <TableCell className="font-bold text-foreground">{paymentLabels[p.method]}</TableCell>
                           <TableCell className="text-right font-extrabold text-foreground text-lg">R$ {p.value.toFixed(2)}</TableCell>
-                          <TableCell><Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleRemovePayment(i)}><Trash2 className="h-4 w-4" /></Button></TableCell>
+                          <TableCell><Button variant="ghost" size="icon" onClick={() => handleRemovePayment(i)}><Trash2 className="h-4 w-4 text-destructive" /></Button></TableCell>
                       </TableRow>
                   ))}
                 </TableBody>
@@ -434,20 +473,59 @@ export default function PDV() {
         </DialogContent>
       </Dialog>
       
+      {/* MODAL NOVA COMANDA COM BUSCA LIMPA */}
       <Dialog open={isComandaModalOpen} onOpenChange={setIsComandaModalOpen}>
         <DialogContent className="sm:max-w-[400px] bg-card border-border shadow-xl">
             <form onSubmit={handleCreateSale}>
-                <DialogHeader>
-                    <DialogTitle className="text-foreground text-xl">Abrir Nova Mesa/Comanda</DialogTitle>
-                </DialogHeader>
+                <DialogHeader><DialogTitle className="text-foreground text-xl">Abrir Nova Mesa/Comanda</DialogTitle></DialogHeader>
                 <div className="grid gap-4 py-6">
                     <div className="space-y-2">
                         <Label className="text-foreground font-semibold">Número da Mesa / Comanda</Label>
                         <Input value={newComandaNumber} onChange={(e) => setNewComandaNumber(e.target.value)} placeholder="Ex: 10" className="text-2xl font-bold h-14 bg-background border-border text-foreground tracking-wider" autoFocus />
                     </div>
-                    <div className="space-y-2">
-                        <Label className="text-foreground font-semibold">Nome do Cliente (Opcional)</Label>
-                        <Input value={newComandaName} onChange={(e) => setNewComandaName(e.target.value)} placeholder="Ex: João Silva" className="h-12 bg-background border-border text-foreground" />
+                    
+                    {/* BUSCA DE CLIENTE INTELIGENTE */}
+                    <div className="space-y-2 relative">
+                        <Label className="text-foreground font-semibold">Cliente (Busque por Nome/CPF ou digite para Avulso)</Label>
+                        <div className="relative">
+                            <Search className="absolute left-3 top-3.5 h-5 w-5 text-muted-foreground" />
+                            <Input 
+                                value={newComandaClienteNome} 
+                                onChange={(e) => {
+                                    setNewComandaClienteNome(e.target.value);
+                                    setNewComandaClienteId(""); // Reseta o ID se ele digitar algo diferente
+                                    setMostrarSugestoes(true);
+                                }} 
+                                onFocus={() => setMostrarSugestoes(true)}
+                                onBlur={() => setTimeout(() => setMostrarSugestoes(false), 200)}
+                                placeholder="Digite o nome ou CPF..." 
+                                className="pl-10 h-12 bg-background border-border text-foreground" 
+                            />
+                        </div>
+
+                        {/* LISTA DE SUGESTÕES */}
+                        {mostrarSugestoes && newComandaClienteNome && (
+                            <div className="absolute top-[100%] left-0 w-full bg-card border border-border rounded-md shadow-lg z-50 max-h-40 overflow-y-auto">
+                                {clients.filter(c => c.nome.toLowerCase().includes(newComandaClienteNome.toLowerCase()) || (c.cpf && c.cpf.includes(newComandaClienteNome))).length === 0 ? (
+                                    <div className="p-3 text-sm text-muted-foreground text-center">Nenhum cliente registado encontrado. Será salvo como cliente avulso.</div>
+                                ) : (
+                                    clients.filter(c => c.nome.toLowerCase().includes(newComandaClienteNome.toLowerCase()) || (c.cpf && c.cpf.includes(newComandaClienteNome))).map(cli => (
+                                        <div
+                                            key={cli.id}
+                                            className="p-3 hover:bg-muted cursor-pointer text-sm flex flex-col border-b border-border last:border-0"
+                                            onClick={() => {
+                                                setNewComandaClienteId(cli.id);
+                                                setNewComandaClienteNome(cli.nome);
+                                                setMostrarSugestoes(false);
+                                            }}
+                                        >
+                                            <span className="font-bold text-foreground">{cli.nome}</span>
+                                            {cli.cpf && <span className="text-xs text-muted-foreground">CPF: {cli.cpf}</span>}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
                 <DialogFooter>

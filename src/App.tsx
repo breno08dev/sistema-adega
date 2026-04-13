@@ -28,9 +28,12 @@ const AdminSales = lazy(() => import("./pages/admin/Sales"));
 const PDV = lazy(() => import("./pages/pdv/PDV"));
 const CollaboratorHistory = lazy(() => import("./pages/pdv/History"));
 const NotFound = lazy(() => import("./pages/NotFound"));
-
-// --- IMPORTAÇÃO DA NOVA PÁGINA ---
 const CaixaRapido = lazy(() => import("./pages/pdv/Caixa-Rapido"));
+
+// --- IMPORTAÇÃO DAS NOVAS PÁGINAS ---
+const Clientes = lazy(() => import("./pages/pdv/Clientes"));
+const Crediario = lazy(() => import("./pages/pdv/Crediario"));
+const Balanco = lazy(() => import("./pages/admin/Balanco"));
 
 const App = () => {
   // Esse código força o HTML a carregar com a classe "dark"
@@ -81,17 +84,27 @@ const App = () => {
                   </ProtectedRoute>
                 }
               />
-
               <Route 
-              path="/admin/caixas" 
-              element={
-              <ProtectedRoute requiredType="admin">
-                <DashboardLayout>
-                  <AdminCaixas />
-                  </DashboardLayout>
+                path="/admin/caixas" 
+                element={
+                  <ProtectedRoute requiredType="admin">
+                    <DashboardLayout>
+                      <AdminCaixas />
+                    </DashboardLayout>
                   </ProtectedRoute>
-                  }  
-                  />
+                }  
+              />
+              {/* --- ROTA DE BALANÇO (ADMIN) --- */}
+              <Route 
+                path="/admin/balanco" 
+                element={
+                  <ProtectedRoute requiredType="admin">
+                    <DashboardLayout>
+                      <Balanco />
+                    </DashboardLayout>
+                  </ProtectedRoute>
+                }  
+              />
 
 
               {/* Rotas Colaborador */}
@@ -115,14 +128,33 @@ const App = () => {
                   </ProtectedRoute>
                 }
               />
-
-              {/* --- ROTA ADICIONADA --- */}
               <Route
                 path="/pdv/caixa-rapido"
                 element={
                   <ProtectedRoute requiredType="colaborador">
                     <DashboardLayout>
                       <CaixaRapido />
+                    </DashboardLayout>
+                  </ProtectedRoute>
+                }
+              />
+              {/* --- ROTAS DE CLIENTES E CREDIÁRIO (COLABORADOR) --- */}
+              <Route
+                path="/pdv/clientes"
+                element={
+                  <ProtectedRoute requiredType="colaborador">
+                    <DashboardLayout>
+                      <Clientes />
+                    </DashboardLayout>
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/pdv/crediario"
+                element={
+                  <ProtectedRoute requiredType="colaborador">
+                    <DashboardLayout>
+                      <Crediario />
                     </DashboardLayout>
                   </ProtectedRoute>
                 }

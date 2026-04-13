@@ -306,7 +306,7 @@ export type Database = {
       movement_type: "entrada" | "saida"
       sale_status: "aberta" | "finalizada"
       user_type: "admin" | "colaborador"
-      payment_method: "dinheiro" | "pix" | "cartao_credito" | "cartao_debito"
+      payment_method: "dinheiro" | "pix" | "cartao_credito" | "cartao_debito" | "fiado";
       caixa_status: "aberto" | "fechado"
     }
     CompositeTypes: {

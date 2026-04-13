@@ -13,7 +13,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
 // --- TIPOS ---
-type SalePayment = { metodo_pagamento: Database["public"]["Enums"]["payment_method"]; valor: number };
+type SalePayment = { metodo_pagamento: string; valor: number };
 type Sale = Database["public"]["Tables"]["sales"]["Row"] & { sale_payments?: SalePayment[] };
 type Movement = Database["public"]["Tables"]["movements"]["Row"];
 
@@ -22,7 +22,14 @@ type CaixaRow = Database["public"]["Tables"]["caixas"]["Row"] & {
   totalVendasCalculado?: number;
 };
 
-const paymentMethodLabels: Record<string, string> = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Crédito", cartao_debito: "Débito" };
+// ATUALIZADO: Inclui fiado
+const paymentMethodLabels: Record<string, string> = { 
+    dinheiro: "Dinheiro", 
+    pix: "Pix", 
+    cartao_credito: "Crédito", 
+    cartao_debito: "Débito",
+    fiado: "Crediário"
+};
 
 export default function AdminCaixas() {
   const [caixas, setCaixas] = useState<CaixaRow[]>([]);
@@ -59,7 +66,7 @@ export default function AdminCaixas() {
         while (hasMore) {
             const { data: salesChunk, error: salesError } = await supabase
                 .from('sales')
-                .select('caixa_id, total')
+                .select('caixa_id, total, metodo_pagamento, sale_payments(metodo_pagamento, valor)')
                 .eq('status', 'finalizada')
                 .in('caixa_id', caixaIds)
                 .range(offset, offset + 999);
@@ -75,14 +82,38 @@ export default function AdminCaixas() {
             }
         }
 
-        // 3. Agrupa e soma os totais localmente com os dados completos
+        // 3. Busca Recebimentos de Crediário do turno
+        const { data: credPgtosChunk } = await supabase
+            .from('crediario_pagamentos')
+            .select('caixa_id, valor')
+            .in('caixa_id', caixaIds);
+
+        // 4. Agrupa e soma os totais localmente
         const salesTotalsByCaixa = allSalesData.reduce((acc: Record<string, number>, sale) => {
             const cId = sale.caixa_id;
-            if (cId) acc[cId] = (acc[cId] || 0) + Number(sale.total || 0);
+            if (!cId) return acc;
+            
+            let val = 0;
+            if (sale.sale_payments && sale.sale_payments.length > 0) {
+                sale.sale_payments.forEach((p: any) => { 
+                    if (p.metodo_pagamento !== 'fiado') val += Number(p.valor); 
+                });
+            } else {
+                if (sale.metodo_pagamento !== 'fiado') val = Number(sale.total || 0);
+            }
+            
+            acc[cId] = (acc[cId] || 0) + val;
             return acc;
         }, {});
 
-        // 4. Junta os dados para a tabela
+        // Soma os recebimentos de fiado ao faturamento do caixa
+        if (credPgtosChunk) {
+            credPgtosChunk.forEach(p => {
+                if (p.caixa_id) salesTotalsByCaixa[p.caixa_id] = (salesTotalsByCaixa[p.caixa_id] || 0) + Number(p.valor);
+            });
+        }
+
+        // 5. Junta os dados para a tabela
         const caixasProcessados = caixasData.map(caixa => ({
             ...caixa,
             totalVendasCalculado: salesTotalsByCaixa[caixa.id] || 0
@@ -102,30 +133,50 @@ export default function AdminCaixas() {
     toast.info("A gerar relatório PDF...");
 
     try {
+      // Vendas normais
       const { data: salesData } = await supabase.from('sales').select('*, sale_payments(metodo_pagamento, valor)').eq('caixa_id', caixa.id).eq('status', 'finalizada');
-      const sales = (salesData as Sale[]) || [];
+      const sales = (salesData as any[]) || [];
 
+      // Recebimentos de Crediário
+      const { data: credPgtosData } = await supabase.from('crediario_pagamentos').select('*, crediarios(clients(nome))').eq('caixa_id', caixa.id);
+      const credPgtos = credPgtosData || [];
+
+      // Movimentações (Entradas/Saídas)
       let movQuery = supabase.from('movements').select('*').eq('responsavel_id', caixa.colaborador_id).gte('created_at', caixa.data_abertura);
       if (caixa.data_fechamento) movQuery = movQuery.lte('created_at', caixa.data_fechamento);
       const { data: movementsData } = await movQuery;
       const movements = (movementsData as Movement[]) || [];
 
+      // Lógica de Soma (Ignora fiado nas vendas, soma os recebimentos)
       let tVendas = 0; let tDinheiro = 0; let tPix = 0; let tCartao = 0;
+      
       sales.forEach(sale => {
-        tVendas += Number(sale.total) || 0;
         if (sale.sale_payments && sale.sale_payments.length > 0) {
-          sale.sale_payments.forEach(payment => {
+          sale.sale_payments.forEach((payment: any) => {
+              if (payment.metodo_pagamento === 'fiado') return; // Ignora fiado
               const val = Number(payment.valor);
+              tVendas += val;
               if (payment.metodo_pagamento === 'dinheiro') tDinheiro += val;
               else if (payment.metodo_pagamento === 'pix') tPix += val;
               else if (['cartao_credito', 'cartao_debito'].includes(payment.metodo_pagamento)) tCartao += val;
           });
         } else {
+          if (sale.metodo_pagamento === 'fiado') return; // Ignora fiado
           const val = Number(sale.total) || 0;
+          tVendas += val;
           if (sale.metodo_pagamento === 'dinheiro') tDinheiro += val;
           else if (sale.metodo_pagamento === 'pix') tPix += val;
           else if (['cartao_credito', 'cartao_debito'].includes(sale.metodo_pagamento || '')) tCartao += val;
         }
+      });
+
+      // Adiciona o Fiado que foi RECEBIDO no dia
+      credPgtos.forEach(pgto => {
+          const val = Number(pgto.valor);
+          tVendas += val; 
+          if (pgto.metodo_pagamento === 'dinheiro') tDinheiro += val;
+          else if (pgto.metodo_pagamento === 'pix') tPix += val;
+          else if (['cartao_credito', 'cartao_debito'].includes(pgto.metodo_pagamento)) tCartao += val;
       });
 
       let tEntradas = 0; let tSaidas = 0;
@@ -135,13 +186,24 @@ export default function AdminCaixas() {
       });
       const saldoFisico = tEntradas + tDinheiro - tSaidas;
 
+      // Histórico Unificado para a Tabela PDF
       const historicoUnificado: any[] = [];
       sales.forEach(sale => {
           let pgtoTexto = 'N/A';
-          if (sale.sale_payments && sale.sale_payments.length > 0) pgtoTexto = "Misto (" + sale.sale_payments.map(p => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
-          else if (sale.metodo_pagamento) pgtoTexto = paymentMethodLabels[sale.metodo_pagamento];
+          // AGORA SÓ É MISTO SE TIVER MAIS DE 1 PAGAMENTO
+          if (sale.sale_payments && sale.sale_payments.length > 1) {
+              pgtoTexto = "Misto (" + sale.sale_payments.map((p: any) => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
+          } else if (sale.sale_payments && sale.sale_payments.length === 1) {
+              pgtoTexto = paymentMethodLabels[sale.sale_payments[0].metodo_pagamento];
+          } else if (sale.metodo_pagamento) {
+              pgtoTexto = paymentMethodLabels[sale.metodo_pagamento];
+          }
 
           historicoUnificado.push({ tipo: 'venda', data: sale.updated_at || sale.created_at, descricao: sale.nome_cliente || "Cliente Balcão", pagamentoTexto: pgtoTexto, valor: Number(sale.total) || 0 });
+      });
+
+      credPgtos.forEach(pgto => {
+          historicoUnificado.push({ tipo: 'recebimento_fiado', data: pgto.created_at, descricao: `Rec. Crediário - ${pgto.crediarios?.clients?.nome || 'Cliente'}`, pagamentoTexto: paymentMethodLabels[pgto.metodo_pagamento], valor: Number(pgto.valor) });
       });
 
       movements.forEach(mov => {
@@ -179,8 +241,8 @@ export default function AdminCaixas() {
           bodyStyles: { textColor: 50 },
           columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } },
           body: [
-              ['Total de Vendas no Turno', `R$ ${tVendas.toFixed(2)}`],
-              ['Dinheiro (Vendas)', `R$ ${tDinheiro.toFixed(2)}`],
+              ['Total de Faturamento (Vendas e Recebimentos)', `R$ ${tVendas.toFixed(2)}`],
+              ['Dinheiro', `R$ ${tDinheiro.toFixed(2)}`],
               ['Pix', `R$ ${tPix.toFixed(2)}`],
               ['Cartão', `R$ ${tCartao.toFixed(2)}`],
               ['Abertura / Entradas (Fundo de Caixa)', `R$ ${tEntradas.toFixed(2)}`],
@@ -194,7 +256,7 @@ export default function AdminCaixas() {
       doc.setFont("helvetica", "bold");
       doc.setFontSize(12);
       doc.setTextColor(0, 0, 0);
-      doc.text("SALDO FINAL DA GAVETA:", 18, finalY + 8);
+      doc.text("SALDO FINAL ESPERADO NA GAVETA:", 18, finalY + 8);
       doc.text(`R$ ${saldoFisico.toFixed(2)}`, 140, finalY + 8);
 
       doc.line(14, finalY + 20, 196, finalY + 20); 
@@ -249,7 +311,7 @@ export default function AdminCaixas() {
                   <TableHead className="text-xs md:text-sm text-muted-foreground">Colaborador</TableHead>
                   <TableHead className="text-xs md:text-sm text-muted-foreground">Status</TableHead>
                   <TableHead className="hidden sm:table-cell text-xs md:text-sm text-muted-foreground">Fecho</TableHead>
-                  <TableHead className="text-right text-xs md:text-sm text-muted-foreground">Total Vendas</TableHead>
+                  <TableHead className="text-right text-xs md:text-sm text-muted-foreground">Faturamento</TableHead>
                   <TableHead className="text-center pr-4 md:pr-6 text-xs md:text-sm text-muted-foreground">Ações</TableHead>
                 </TableRow>
               </TableHeader>

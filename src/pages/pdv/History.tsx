@@ -5,74 +5,32 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter
-} from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
-import { Database } from "@/integrations/supabase/types";
 import { toast } from "sonner";
-import { 
-    Download, 
-    Lock, 
-    ChevronDown, 
-    Wallet, 
-    CreditCard, 
-    Smartphone, 
-    DollarSign, 
-    TrendingUp,
-    ArrowUpCircle,
-    Receipt,
-    MinusCircle,
-    FileText,
-    AlertTriangle
-} from "lucide-react"; 
-
+import { Lock, ChevronDown, Wallet, CreditCard, Smartphone, DollarSign, TrendingUp, ArrowUpCircle, Receipt, MinusCircle, FileText, AlertTriangle } from "lucide-react"; 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
-// --- TIPOS ---
-type PaymentMethod = Database["public"]["Enums"]["payment_method"];
+// Tipos definidos para aceitar 'fiado'
+type PaymentMethod = "dinheiro" | "pix" | "cartao_credito" | "cartao_debito" | "fiado";
 type SalePayment = { metodo_pagamento: PaymentMethod; valor: number };
+type Sale = any; 
+type Movement = any;
+type Caixa = any;
+type SaleItem = any;
 
-type Sale = Database["public"]["Tables"]["sales"]["Row"] & {
-  sale_payments?: SalePayment[]; 
-};
-type Movement = Database["public"]["Tables"]["movements"]["Row"];
-type Caixa = Database["public"]["Tables"]["caixas"]["Row"];
-type SaleItem = Database["public"]["Tables"]["sale_items"]["Row"] & {
-  products: { nome: string } | null;
-};
-
-const paymentMethodLabels: Record<PaymentMethod, string> = {
-  dinheiro: "Dinheiro",
-  pix: "Pix",
-  cartao_credito: "Crédito",
-  cartao_debito: "Débito",
+const paymentMethodLabels: Record<string, string> = { 
+  dinheiro: "Dinheiro", 
+  pix: "Pix", 
+  cartao_credito: "Crédito", 
+  cartao_debito: "Débito", 
+  fiado: "CREDIÁRIO" 
 };
 
 export default function CollaboratorHistory() {
@@ -80,18 +38,15 @@ export default function CollaboratorHistory() {
   const [loading, setLoading] = useState(true);
   const [sales, setSales] = useState<Sale[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]); 
+  const [credPgtos, setCredPgtos] = useState<any[]>([]); // Pagamentos parciais ou totais de Fiado
   const [caixaAberto, setCaixaAberto] = useState<Caixa | null>(null);
   
-  // Modais
   const [isCloseCaixaAlertOpen, setIsCloseCaixaAlertOpen] = useState(false);
   const [isSangriaModalOpen, setIsSangriaModalOpen] = useState(false);
-  
-  // Estado Sangria
   const [sangriaValor, setSangriaValor] = useState("");
   const [sangriaDescricao, setSangriaDescricao] = useState("");
   const [isSubmittingSangria, setIsSubmittingSangria] = useState(false);
 
-  // --- 1. CARREGAR DADOS ---
   const checkCaixaAberto = async () => {
     if (!user) return;
     setLoading(true);
@@ -103,22 +58,24 @@ export default function CollaboratorHistory() {
       .eq('status', 'aberto')
       .single();
 
-    if (caixaError && caixaError.code !== 'PGRST116') {
-      toast.error("Erro ao verificar status do caixa");
-      setLoading(false);
-      return;
+    if (caixaError && caixaError.code !== 'PGRST116') { 
+        toast.error("Erro ao verificar status do caixa"); 
+        setLoading(false); 
+        return; 
     }
 
     if (caixaData) {
-      setCaixaAberto(caixaData as Caixa);
+      setCaixaAberto(caixaData);
       await Promise.all([
         loadSales(caixaData.data_abertura),
-        loadMovements(caixaData.data_abertura)
+        loadMovements(caixaData.data_abertura),
+        loadCredPgtos(caixaData.id) // Carrega recebimentos do Crediário deste caixa
       ]);
-    } else {
-      setCaixaAberto(null);
-      setSales([]);
-      setMovements([]);
+    } else { 
+        setCaixaAberto(null); 
+        setSales([]); 
+        setMovements([]); 
+        setCredPgtos([]); 
     }
     setLoading(false);
   };
@@ -131,10 +88,11 @@ export default function CollaboratorHistory() {
       .from('sales')
       .select('*, sale_payments(metodo_pagamento, valor)')
       .eq('colaborador_id', user.id)
-      .eq('status', 'finalizada') 
+      .eq('status', 'finalizada')
       .gte('updated_at', dataInicio)
       .order('updated_at', { ascending: false });
-    if (data) setSales(data as Sale[]);
+      
+    if (data) setSales(data);
   };
 
   const loadMovements = async (dataInicio: string) => {
@@ -142,67 +100,75 @@ export default function CollaboratorHistory() {
     const { data } = await supabase
       .from('movements')
       .select('*')
-      .eq('responsavel_id', user.id) 
+      .eq('responsavel_id', user.id)
       .gte('created_at', dataInicio)
       .order('created_at', { ascending: false });
+      
     if (data) setMovements(data);
   };
 
-  // --- 2. CÁLCULOS E HISTÓRICO UNIFICADO ---
-  const { 
-    totalVendas, 
-    totalEntradasAbertura, 
-    totalSaidasSangria, 
-    totalDinheiroVendas, 
-    totalPix, 
-    totalCartao, 
-    saldoFisico 
-  } = useMemo(() => {
+  // BUSCA OS PAGAMENTOS DE FIADO (Mesmo que a pessoa pague só R$ 10, vai aparecer aqui)
+  const loadCredPgtos = async (caixaId: string) => {
+    const { data } = await supabase
+      .from('crediario_pagamentos')
+      .select(`
+          id, valor, metodo_pagamento, created_at,
+          crediarios ( clients ( nome ) )
+      `)
+      .eq('caixa_id', caixaId);
+      
+    if (data) setCredPgtos(data);
+  };
+
+  const { totalVendas, totalEntradasAbertura, totalSaidasSangria, totalDinheiroVendas, totalPix, totalCartao, saldoFisico } = useMemo(() => {
     let tVendas = 0; let tDinheiro = 0; let tPix = 0; let tCartao = 0;
 
+    // 1. Soma das Vendas normais (IGNORA OS VALORES DE FIADO PARA NÃO DUPLICAR FATURAMENTO)
     sales.forEach(sale => {
-      tVendas += Number(sale.total) || 0;
-      
       if (sale.sale_payments && sale.sale_payments.length > 0) {
-        sale.sale_payments.forEach(payment => {
+        sale.sale_payments.forEach((payment: any) => {
+            if (payment.metodo_pagamento === 'fiado') return; // Fiado não é dinheiro no caixa hoje
             const val = Number(payment.valor);
+            tVendas += val;
             if (payment.metodo_pagamento === 'dinheiro') tDinheiro += val;
             else if (payment.metodo_pagamento === 'pix') tPix += val;
             else if (['cartao_credito', 'cartao_debito'].includes(payment.metodo_pagamento)) tCartao += val;
         });
       } else {
+        if (sale.metodo_pagamento === 'fiado') return; // Fiado não é dinheiro no caixa hoje
         const val = Number(sale.total) || 0;
+        tVendas += val;
         if (sale.metodo_pagamento === 'dinheiro') tDinheiro += val;
         else if (sale.metodo_pagamento === 'pix') tPix += val;
         else if (['cartao_credito', 'cartao_debito'].includes(sale.metodo_pagamento || '')) tCartao += val;
       }
     });
 
+    // 2. Soma os Pagamentos do Crediário (AGORA SIM É FATURAMENTO, porque o dinheiro entrou!)
+    credPgtos.forEach(pgto => {
+        const val = Number(pgto.valor);
+        tVendas += val; // Entra no faturamento do turno
+        
+        if (pgto.metodo_pagamento === 'dinheiro') tDinheiro += val;
+        else if (pgto.metodo_pagamento === 'pix') tPix += val;
+        else if (['cartao_credito', 'cartao_debito'].includes(pgto.metodo_pagamento)) tCartao += val;
+    });
+
     let tAbertura = 0; let tSaidas = 0;
     movements.forEach(mov => {
       if (mov.tipo === 'entrada') tAbertura += Number(mov.valor);
-      else if (mov.descricao !== 'Fechamento de Caixa') {
-        tSaidas += Number(mov.valor);
-      }
+      else if (mov.descricao !== 'Fechamento de Caixa') tSaidas += Number(mov.valor);
     });
 
     const saldoFinal = tAbertura + tDinheiro - tSaidas;
+    return { totalVendas: tVendas, totalEntradasAbertura: tAbertura, totalSaidasSangria: tSaidas, totalDinheiroVendas: tDinheiro, totalPix: tPix, totalCartao: tCartao, saldoFisico: saldoFinal };
+  }, [sales, movements, credPgtos]);
 
-    return { 
-        totalVendas: tVendas, 
-        totalEntradasAbertura: tAbertura, 
-        totalSaidasSangria: tSaidas,
-        totalDinheiroVendas: tDinheiro, 
-        totalPix: tPix, 
-        totalCartao: tCartao, 
-        saldoFisico: saldoFinal
-    };
-  }, [sales, movements]);
-
-  // FUNÇÕES HELPER PARA PAGAMENTO
-  const getPaymentText = (sale: Sale): string => {
-    if (sale.sale_payments && sale.sale_payments.length > 0) {
-        return "(" + sale.sale_payments.map(p => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
+const getPaymentText = (sale: Sale): string => {
+    if (sale.sale_payments && sale.sale_payments.length > 1) {
+        return "Misto (" + sale.sale_payments.map((p: any) => paymentMethodLabels[p.metodo_pagamento]).join(", ") + ")";
+    } else if (sale.sale_payments && sale.sale_payments.length === 1) {
+        return paymentMethodLabels[sale.sale_payments[0].metodo_pagamento];
     } else if (sale.metodo_pagamento) {
         return paymentMethodLabels[sale.metodo_pagamento];
     }
@@ -210,138 +176,96 @@ export default function CollaboratorHistory() {
   };
 
   const renderPaymentBadge = (sale: Sale) => {
-    if (sale.sale_payments && sale.sale_payments.length > 0) {
+    if (sale.sale_payments && sale.sale_payments.length > 1) {
         return (
            <div className="flex flex-col gap-1 items-start">
-             {sale.sale_payments.map((p, idx) => (
-               <Badge key={idx} variant="outline" className="bg-muted text-foreground border-border font-medium shadow-none">
+             <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 font-bold shadow-none">Misto</Badge>
+             {sale.sale_payments.map((p: any, idx: number) => (
+               <Badge key={idx} variant="outline" className="bg-muted text-foreground border-border text-[10px] shadow-none">
                  {paymentMethodLabels[p.metodo_pagamento]}: R$ {Number(p.valor).toFixed(2)}
                </Badge>
              ))}
            </div>
         );
+    } else if (sale.sale_payments && sale.sale_payments.length === 1) {
+        const isFiado = sale.sale_payments[0].metodo_pagamento === 'fiado';
+        return <Badge variant="outline" className={`border-border ${isFiado ? 'text-orange-500 bg-orange-500/10' : 'text-foreground'}`}>{paymentMethodLabels[sale.sale_payments[0].metodo_pagamento]}</Badge>;
     } else if (sale.metodo_pagamento) {
-        return <Badge variant="outline" className="border-border text-foreground">{paymentMethodLabels[sale.metodo_pagamento]}</Badge>;
+        const isFiado = sale.metodo_pagamento === 'fiado';
+        return <Badge variant="outline" className={`border-border ${isFiado ? 'text-orange-500 bg-orange-500/10' : 'text-foreground'}`}>{paymentMethodLabels[sale.metodo_pagamento]}</Badge>;
     }
     return <Badge variant="destructive">N/A</Badge>;
   };
-
+  
   const historicoUnificado = useMemo(() => {
-    const itens = [];
+    const itens: any[] = [];
+    
+    // As Vendas Realizadas (Inclui fiado para mostrar o produto que saiu, mas sem somar nos cartões acima)
     sales.forEach(sale => {
-        itens.push({
-            id: sale.id,
-            tipo: 'venda',
-            data: sale.updated_at || sale.created_at,
-            descricao: sale.nome_cliente || "Cliente Balcão",
-            pagamentoTexto: getPaymentText(sale),
-            pagamentoBadge: renderPaymentBadge(sale),
-            valor: Number(sale.total) || 0,
+        itens.push({ id: sale.id, tipo: 'venda', data: sale.updated_at || sale.created_at, descricao: sale.nome_cliente || "Cliente Balcão", pagamentoTexto: getPaymentText(sale), pagamentoBadge: renderPaymentBadge(sale), valor: Number(sale.total) || 0 });
+    });
+    
+    // Os Pagamentos Recebidos do Fiado (As parcelas que o cliente veio pagar hoje)
+    credPgtos.forEach(pgto => {
+        itens.push({ 
+            id: pgto.id, 
+            tipo: 'recebimento_fiado', 
+            data: pgto.created_at, 
+            descricao: `Rec. Crediário - ${pgto.crediarios?.clients?.nome || 'Cliente'}`, 
+            pagamentoTexto: paymentMethodLabels[pgto.metodo_pagamento], 
+            pagamentoBadge: <Badge className="bg-emerald-500 text-white shadow-none hover:bg-emerald-600">Rec. Crediário</Badge>, 
+            valor: Number(pgto.valor) 
         });
     });
+    
+    // As Sangrias Realizadas
     movements.forEach(mov => {
         if (mov.tipo === 'saida' && mov.descricao.includes('[Sangria]')) {
-            itens.push({
-                id: mov.id,
-                tipo: 'sangria',
-                data: mov.created_at,
-                descricao: mov.descricao, 
-                pagamentoTexto: "Sangria (Saída)",
-                pagamentoBadge: <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 font-semibold shadow-none">Sangria</Badge>,
-                valor: Number(mov.valor) || 0,
-            });
+            itens.push({ id: mov.id, tipo: 'sangria', data: mov.created_at, descricao: mov.descricao, pagamentoTexto: "Sangria (Saída)", pagamentoBadge: <Badge variant="outline" className="bg-destructive/10 text-destructive border-destructive/20 font-semibold shadow-none">Sangria</Badge>, valor: Number(mov.valor) || 0 });
         }
     });
+    
     return itens.sort((a, b) => new Date(b.data).getTime() - new Date(a.data).getTime());
-  }, [sales, movements]);
+  }, [sales, movements, credPgtos]);
 
-  // --- GERADOR DE PDF PROFISSIONAL ---
+
   const generatePDF = () => {
-    if (!caixaAberto) return; 
-    
-    const doc = new jsPDF();
-    const dataAbertura = format(new Date(caixaAberto.data_abertura), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
-    const dataAtual = format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
-    
-    // Título Principal
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(16);
-    doc.text("Relatório de Fechamento de Turno", 14, 20);
-    
-    // Metadados do Caixa
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(10);
-    doc.text(`Colaborador: ${userName || user?.email}`, 14, 28);
-    doc.text(`Abertura do Caixa: ${dataAbertura}`, 14, 34);
-    doc.text(`Horário do Relatório: ${dataAtual}`, 14, 40);
-    
-    doc.line(14, 45, 196, 45); // Linha divisória
+      if (!caixaAberto) return; 
+      const doc = new jsPDF();
+      const dataAbertura = format(new Date(caixaAberto.data_abertura), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
+      const dataAtual = format(new Date(), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR });
+      
+      doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.text("Relatório de Fechamento de Turno", 14, 20);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(10);
+      doc.text(`Colaborador: ${userName || user?.email}`, 14, 28); doc.text(`Abertura do Caixa: ${dataAbertura}`, 14, 34); doc.text(`Horário do Relatório: ${dataAtual}`, 14, 40);
+      doc.line(14, 45, 196, 45); 
 
-    // Resumo Financeiro
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.text("Resumo Financeiro:", 14, 55);
-    
-    doc.setFont("helvetica", "normal");
-    autoTable(doc, {
-        startY: 60,
-        theme: 'grid',
-        headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' },
-        bodyStyles: { textColor: 50 },
-        columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } },
-        body: [
-            ['Total de Vendas no Turno', `R$ ${totalVendas.toFixed(2)}`],
-            ['Dinheiro (Vendas)', `R$ ${totalDinheiroVendas.toFixed(2)}`],
-            ['Pix', `R$ ${totalPix.toFixed(2)}`],
-            ['Cartão', `R$ ${totalCartao.toFixed(2)}`],
-            ['Abertura / Entradas (Fundo de Caixa)', `R$ ${totalEntradasAbertura.toFixed(2)}`],
-            ['Saídas / Sangrias', `R$ ${totalSaidasSangria.toFixed(2)}`],
-        ],
-    });
+      doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text("Resumo Financeiro:", 14, 55);
+      doc.setFont("helvetica", "normal");
+      autoTable(doc, {
+          startY: 60, theme: 'grid', headStyles: { fillColor: [41, 128, 185], textColor: 255, fontStyle: 'bold' }, bodyStyles: { textColor: 50 }, columnStyles: { 1: { halign: 'right', fontStyle: 'bold' } },
+          body: [ 
+              ['Total de Faturamento do Turno', `R$ ${totalVendas.toFixed(2)}`], 
+              ['Dinheiro', `R$ ${totalDinheiroVendas.toFixed(2)}`], 
+              ['Pix', `R$ ${totalPix.toFixed(2)}`], 
+              ['Cartão', `R$ ${totalCartao.toFixed(2)}`], 
+              ['Abertura / Entradas (Fundo de Caixa)', `R$ ${totalEntradasAbertura.toFixed(2)}`], 
+              ['Saídas / Sangrias', `R$ ${totalSaidasSangria.toFixed(2)}`] 
+          ],
+      });
 
-    // Bloco de Saldo Final com Destaque
-    const finalY = (doc as any).lastAutoTable.finalY + 10;
-    doc.setFillColor(240, 240, 240); // Fundo cinza claro
-    doc.rect(14, finalY, 182, 12, 'F');
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.setTextColor(0, 0, 0);
-    doc.text("SALDO FINAL ESPERADO NA GAVETA:", 18, finalY + 8);
-    doc.text(`R$ ${saldoFisico.toFixed(2)}`, 140, finalY + 8);
-
-    doc.line(14, finalY + 20, 196, finalY + 20); // Linha divisória
-
-    // Histórico Detalhado
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(12);
-    doc.text("Histórico Detalhado de Movimentações:", 14, finalY + 30);
-    
-    const historyBody = historicoUnificado.map(item => [
-      format(new Date(item.data), "HH:mm"),
-      item.descricao,
-      item.pagamentoTexto, 
-      `${item.tipo === 'sangria' ? '- ' : ''}R$ ${item.valor.toFixed(2)}`
-    ]);
-    
-    autoTable(doc, {
-      startY: finalY + 35,
-      theme: 'striped',
-      headStyles: { fillColor: [100, 116, 139], textColor: 255 },
-      head: [['Hora', 'Cliente / Descrição', 'Pagamento/Tipo', 'Valor']], 
-      body: historyBody,
-    });
-    
-    // Espaço para Assinatura
-    const pageHeight = doc.internal.pageSize.height;
-    if ((doc as any).lastAutoTable.finalY > pageHeight - 40) doc.addPage();
-    
-    const sigY = doc.internal.pageSize.height - 20;
-    doc.line(60, sigY - 5, 150, sigY - 5);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.text("Assinatura do Colaborador", 105, sigY, { align: "center" });
-
-    doc.save(`Relatorio_Caixa_${format(new Date(), "dd-MM")}.pdf`);
+      const finalY = (doc as any).lastAutoTable.finalY + 10;
+      doc.setFillColor(240, 240, 240); doc.rect(14, finalY, 182, 12, 'F'); doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(0, 0, 0); doc.text("SALDO FINAL ESPERADO NA GAVETA:", 18, finalY + 8); doc.text(`R$ ${saldoFisico.toFixed(2)}`, 140, finalY + 8);
+      doc.line(14, finalY + 20, 196, finalY + 20); 
+      doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.text("Histórico Detalhado de Movimentações:", 14, finalY + 30);
+      
+      const historyBody = historicoUnificado.map(item => [ format(new Date(item.data), "HH:mm"), item.descricao, item.pagamentoTexto, `${item.tipo === 'sangria' ? '- ' : ''}R$ ${item.valor.toFixed(2)}` ]);
+      autoTable(doc, { startY: finalY + 35, theme: 'striped', headStyles: { fillColor: [100, 116, 139], textColor: 255 }, head: [['Hora', 'Cliente / Descrição', 'Pagamento/Tipo', 'Valor']], body: historyBody });
+      
+      const pageHeight = doc.internal.pageSize.height;
+      if ((doc as any).lastAutoTable.finalY > pageHeight - 40) doc.addPage();
+      const sigY = doc.internal.pageSize.height - 20; doc.line(60, sigY - 5, 150, sigY - 5); doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.text("Assinatura do Colaborador", 105, sigY, { align: "center" });
+      doc.save(`Relatorio_Caixa_${format(new Date(), "dd-MM")}.pdf`);
   };
 
   const handleSangria = async () => {
@@ -429,7 +353,6 @@ export default function CollaboratorHistory() {
                 </DropdownMenuContent>
             </DropdownMenu>
             
-            {/* NOVO MODAL DE TRAVA DE RELATÓRIO */}
             <AlertDialogContent className="bg-card border-border">
                 <AlertDialogHeader>
                     <AlertDialogTitle className="text-foreground text-xl flex items-center gap-2">
@@ -458,13 +381,13 @@ export default function CollaboratorHistory() {
 
       <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="border-l-4 border-l-emerald-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Gaveta (Dinheiro)</CardTitle><div className="h-8 w-8 rounded-full bg-emerald-500/10 flex items-center justify-center"><Wallet className="h-4 w-4 text-emerald-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {saldoFisico.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Físico disponível</p></CardContent></Card>
-        <Card className="border-l-4 border-l-primary shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Dinheiro</CardTitle><div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center"><DollarSign className="h-4 w-4 text-primary" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalDinheiroVendas.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Entrada em espécie</p></CardContent></Card>
-        <Card className="border-l-4 border-l-cyan-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Pix</CardTitle><div className="h-8 w-8 rounded-full bg-cyan-500/10 flex items-center justify-center"><Smartphone className="h-4 w-4 text-cyan-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalPix.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Transf. Digital</p></CardContent></Card>
-        <Card className="border-l-4 border-l-purple-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Vendas Cartão</CardTitle><div className="h-8 w-8 rounded-full bg-purple-500/10 flex items-center justify-center"><CreditCard className="h-4 w-4 text-purple-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalCartao.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Crédito / Débito</p></CardContent></Card>
+        <Card className="border-l-4 border-l-primary shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Dinheiro</CardTitle><div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center"><DollarSign className="h-4 w-4 text-primary" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalDinheiroVendas.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Entrada em espécie</p></CardContent></Card>
+        <Card className="border-l-4 border-l-cyan-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total Pix</CardTitle><div className="h-8 w-8 rounded-full bg-cyan-500/10 flex items-center justify-center"><Smartphone className="h-4 w-4 text-cyan-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalPix.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Transf. Digital</p></CardContent></Card>
+        <Card className="border-l-4 border-l-purple-500 shadow-sm transition-all bg-card border-y-border border-r-border"><CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Total Cartão</CardTitle><div className="h-8 w-8 rounded-full bg-purple-500/10 flex items-center justify-center"><CreditCard className="h-4 w-4 text-purple-500" /></div></CardHeader><CardContent><div className="text-2xl font-bold text-foreground">R$ {totalCartao.toFixed(2)}</div><p className="text-[10px] text-muted-foreground mt-1">Crédito / Débito</p></CardContent></Card>
       </div>
       
       <div className="flex flex-wrap gap-4 text-sm px-4 py-3 bg-muted/30 rounded-lg border border-dashed border-border">
-         <div className="flex items-center gap-2"><div className="p-1 bg-primary/10 rounded text-primary"><TrendingUp className="h-3 w-3" /></div><span className="text-muted-foreground">Total Vendido: <strong className="text-foreground">R$ {totalVendas.toFixed(2)}</strong></span></div>
+         <div className="flex items-center gap-2"><div className="p-1 bg-primary/10 rounded text-primary"><TrendingUp className="h-3 w-3" /></div><span className="text-muted-foreground">Faturamento: <strong className="text-foreground">R$ {totalVendas.toFixed(2)}</strong></span></div>
          <div className="w-px h-4 bg-border self-center hidden sm:block"></div>
          <div className="flex items-center gap-2"><div className="p-1 bg-emerald-500/10 rounded text-emerald-500"><ArrowUpCircle className="h-3 w-3" /></div><span className="text-muted-foreground">Abertura: <strong className="text-foreground">R$ {totalEntradasAbertura.toFixed(2)}</strong></span></div>
          <div className="w-px h-4 bg-border self-center hidden sm:block"></div>
@@ -519,16 +442,18 @@ function SaleDetailsDialog({ saleId }: { saleId: string }) {
   const [isOpen, setIsOpen] = useState(false);
   const [items, setItems] = useState<SaleItem[]>([]);
   const [loading, setLoading] = useState(false);
+  
   useEffect(() => {
     const loadDetails = async () => {
         if (!isOpen) return;
         setLoading(true);
         const { data, error } = await supabase.from('sale_items').select('*, products(nome)').eq('venda_id', saleId);
-        if (!error && data) setItems(data as unknown as SaleItem[]);
+        if (!error && data) setItems(data);
         setLoading(false);
     };
     loadDetails();
   }, [isOpen, saleId]);
+
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>
       <DialogTrigger asChild><Button variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-primary hover:bg-primary/10">Detalhes</Button></DialogTrigger>
@@ -538,7 +463,7 @@ function SaleDetailsDialog({ saleId }: { saleId: string }) {
             <div className="border border-border rounded-md overflow-hidden">
                 <Table>
                     <TableHeader><TableRow className="bg-muted/50 border-border hover:bg-transparent"><TableHead className="h-9 text-muted-foreground">Produto</TableHead><TableHead className="h-9 text-center text-muted-foreground">Qtd.</TableHead><TableHead className="h-9 text-right text-muted-foreground">Total</TableHead></TableRow></TableHeader>
-                    <TableBody>{items.map(item => (<TableRow key={item.id} className="hover:bg-muted/30 border-border"><TableCell className="py-2 text-sm text-foreground">{item.products?.nome}</TableCell><TableCell className="py-2 text-sm text-center text-foreground">{item.quantidade}</TableCell><TableCell className="py-2 text-sm text-right font-medium text-foreground">R$ {Number(item.subtotal).toFixed(2)}</TableCell></TableRow>))}</TableBody>
+                    <TableBody>{items.map((item: any) => (<TableRow key={item.id} className="hover:bg-muted/30 border-border"><TableCell className="py-2 text-sm text-foreground">{item.products?.nome}</TableCell><TableCell className="py-2 text-sm text-center text-foreground">{item.quantidade}</TableCell><TableCell className="py-2 text-sm text-right font-medium text-foreground">R$ {Number(item.subtotal).toFixed(2)}</TableCell></TableRow>))}</TableBody>
                 </Table>
             </div>
         )}
